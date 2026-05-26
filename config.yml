@@ -1,0 +1,27 @@
+github:
+  auth:
+    type: bot_token
+    token_env: GITHUB_TOKEN
+  bot_username: bridgedburden
+
+codeberg:
+  base_url: https://codeberg.org
+  auth:
+    token_env: CODEBERG_TOKEN
+  webhook:
+    secret_env: CODEBERG_WEBHOOK_SECRET
+
+storage:
+  sqlite_path: ./data/database.sqlite
+
+git:
+  working_directory: ./repos
+
+mirrors:
+  - name: monero
+    github_repo: plowsof/monero
+    codeberg_repo: montero-project/monero
+    allowed_codeberg_users:
+      - plowsof
+    base_branch: master
+    branch_prefix: codeberg-pr

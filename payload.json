@@ -1,0 +1,7 @@
+{
+  "action": "opened",
+  "pull_request": {
+    "number": 1,
+    "base": { "repo": { "full_name": "montero-project/monero" } }
+  }
+}

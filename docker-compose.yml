@@ -1,0 +1,15 @@
+services:
+  codeberg-bridge:
+    build: .
+    container_name: codeberg-bridge
+    environment:
+      - CONFIG_PATH=/app/config.yml
+      - GITHUB_TOKEN=${GITHUB_TOKEN}
+      - CODEBERG_TOKEN=${CODEBERG_TOKEN}
+      - CODEBERG_WEBHOOK_SECRET=${CODEBERG_WEBHOOK_SECRET}
+    volumes:
+      - ./config.yml:/app/config.yml:ro
+      - ./data:/app/data
+      - ./repos:/app/repos
+    ports:
+      - "8888:8080"

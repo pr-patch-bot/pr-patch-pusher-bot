@@ -1,0 +1,169 @@
+from __future__ import annotations
+
+import sqlite3
+import time
+from dataclasses import dataclass
+
+
+SCHEMA = """
+CREATE TABLE IF NOT EXISTS mirrored_prs (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  codeberg_repo TEXT NOT NULL,
+  codeberg_pr_number INTEGER NOT NULL,
+  github_repo TEXT NOT NULL,
+  github_pr_number INTEGER,
+  github_fork_repo TEXT NOT NULL,
+  github_branch TEXT NOT NULL,
+  last_synced_commit TEXT,
+  status TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL,
+  UNIQUE(codeberg_repo, codeberg_pr_number, github_repo)
+);
+"""
+
+
+@dataclass(frozen=True)
+class MirroredPR:
+    codeberg_repo: str
+    codeberg_pr_number: int
+    github_repo: str
+    github_pr_number: int | None
+    github_fork_repo: str
+    github_branch: str
+    last_synced_commit: str | None
+    status: str
+
+
+class Database:
+    def __init__(self, sqlite_path: str):
+        self._sqlite_path = sqlite_path
+
+    def connect(self) -> sqlite3.Connection:
+        conn = sqlite3.connect(self._sqlite_path)
+        conn.row_factory = sqlite3.Row
+        return conn
+
+    def init(self) -> None:
+        with self.connect() as conn:
+            conn.executescript(SCHEMA)
+
+    def upsert_mapping(
+        self,
+        *,
+        codeberg_repo: str,
+        codeberg_pr_number: int,
+        github_repo: str,
+        github_fork_repo: str,
+        github_branch: str,
+        status: str,
+        github_pr_number: int | None = None,
+        last_synced_commit: str | None = None,
+    ) -> None:
+        now = int(time.time())
+        with self.connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO mirrored_prs (
+                  codeberg_repo, codeberg_pr_number,
+                  github_repo, github_pr_number,
+                  github_fork_repo, github_branch,
+                  last_synced_commit, status,
+                  created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(codeberg_repo, codeberg_pr_number, github_repo)
+                DO UPDATE SET
+                  github_pr_number=COALESCE(excluded.github_pr_number, mirrored_prs.github_pr_number),
+                  github_fork_repo=excluded.github_fork_repo,
+                  github_branch=excluded.github_branch,
+                  last_synced_commit=excluded.last_synced_commit,
+                  status=excluded.status,
+                  updated_at=excluded.updated_at
+                """,
+                (
+                    codeberg_repo,
+                    codeberg_pr_number,
+                    github_repo,
+                    github_pr_number,
+                    github_fork_repo,
+                    github_branch,
+                    last_synced_commit,
+                    status,
+                    now,
+                    now,
+                ),
+            )
+
+    def get_mapping(
+        self, *, codeberg_repo: str, codeberg_pr_number: int, github_repo: str
+    ) -> MirroredPR | None:
+        with self.connect() as conn:
+            row = conn.execute(
+                """
+                SELECT codeberg_repo, codeberg_pr_number, github_repo, github_pr_number,
+                       github_fork_repo, github_branch, last_synced_commit, status
+                FROM mirrored_prs
+                WHERE codeberg_repo=? AND codeberg_pr_number=? AND github_repo=?
+                """,
+                (codeberg_repo, codeberg_pr_number, github_repo),
+            ).fetchone()
+            if not row:
+                return None
+            return MirroredPR(
+                codeberg_repo=row["codeberg_repo"],
+                codeberg_pr_number=int(row["codeberg_pr_number"]),
+                github_repo=row["github_repo"],
+                github_pr_number=row["github_pr_number"],
+                github_fork_repo=row["github_fork_repo"],
+                github_branch=row["github_branch"],
+                last_synced_commit=row["last_synced_commit"],
+                status=row["status"],
+            )
+
+    def update_status(
+        self,
+        *,
+        codeberg_repo: str,
+        codeberg_pr_number: int,
+        github_repo: str,
+        status: str,
+    ) -> None:
+        now = int(time.time())
+        with self.connect() as conn:
+            conn.execute(
+                """
+                UPDATE mirrored_prs
+                SET status=?, updated_at=?
+                WHERE codeberg_repo=? AND codeberg_pr_number=? AND github_repo=?
+                """,
+                (status, now, codeberg_repo, codeberg_pr_number, github_repo),
+            )
+
+    def list_open_mappings(
+        self, *, codeberg_repo: str, github_repo: str
+    ) -> list[MirroredPR]:
+        with self.connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT codeberg_repo, codeberg_pr_number, github_repo, github_pr_number,
+                       github_fork_repo, github_branch, last_synced_commit, status
+                FROM mirrored_prs
+                WHERE codeberg_repo=? AND github_repo=? AND status='open'
+                """,
+                (codeberg_repo, github_repo),
+            ).fetchall()
+        out: list[MirroredPR] = []
+        for row in rows:
+            out.append(
+                MirroredPR(
+                    codeberg_repo=row["codeberg_repo"],
+                    codeberg_pr_number=int(row["codeberg_pr_number"]),
+                    github_repo=row["github_repo"],
+                    github_pr_number=row["github_pr_number"],
+                    github_fork_repo=row["github_fork_repo"],
+                    github_branch=row["github_branch"],
+                    last_synced_commit=row["last_synced_commit"],
+                    status=row["status"],
+                )
+            )
+        return out

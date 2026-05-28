@@ -31,13 +31,31 @@ def parse_duration_seconds(value: str) -> int:
     Parses durations like "30s", "10m", "8h", "1d".
     If the unit is omitted (e.g. "1"), hours are assumed.
     """
-    m = _DURATION_RE.match(value or "")
-    if not m:
+    raw_value = value or ""
+    match = _DURATION_RE.match(raw_value)
+    if not match:
         raise ValueError(f"Invalid duration: {value!r} (expected e.g. '10m', '8h', '1d')")
-    amount = int(m.group(1))
-    unit = (m.group(2) or "h").lower()
-    mult = {"s": 1, "m": 60, "h": 3600, "d": 86400}[unit]
-    seconds = amount * mult
+
+    amount_str = match.group(1)
+    unit_raw = match.group(2) or ""
+    unit = unit_raw.strip().lower() if unit_raw else "h"
+
+    try:
+        amount = int(amount_str)
+    except Exception as e:
+        raise ValueError(f"Invalid duration amount: {value!r}") from e
+
+    if unit == "s":
+        seconds = amount
+    elif unit == "m":
+        seconds = amount * 60
+    elif unit == "h":
+        seconds = amount * 60 * 60
+    elif unit == "d":
+        seconds = amount * 60 * 60 * 24
+    else:
+        raise ValueError(f"Invalid duration unit: {value!r} (expected s/m/h/d)")
+
     if seconds <= 0:
         raise ValueError(f"Duration must be > 0: {value!r}")
-    return seconds
+    return int(seconds)

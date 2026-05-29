@@ -344,13 +344,13 @@ async def mirror_comments_once(
                     gh_position = position if position is not None else None
                     if path and m.last_synced_commit and (gh_position is not None or gh_line is not None):
                         try:
-                            created_gh = await github.create_pull_review_comment(
+                            created_gh = await github.create_review_comment(
                                 repo=mirror.github_repo,
                                 pull_number=github_pr_number,
                                 commit_id=m.last_synced_commit,
                                 path=path,
-                                line=gh_line,
-                                position=gh_position,
+                                position=int(gh_position) if isinstance(gh_position, int) else None,
+                                line=int(gh_line) if isinstance(gh_line, int) else None,
                                 body=rc_body,
                             )
                             db.upsert_mirrored_comment(
@@ -553,13 +553,13 @@ async def mirror_comments_once(
                         gh_position = thread_info.position if thread_info.position is not None else None
                         if thread_info.path and m.last_synced_commit and (gh_position is not None or gh_line is not None):
                             try:
-                                created_gh = await github.create_pull_review_comment(
+                                created_gh = await github.create_review_comment(
                                     repo=mirror.github_repo,
                                     pull_number=github_pr_number,
                                     commit_id=m.last_synced_commit,
                                     path=thread_info.path,
-                                    line=gh_line,
-                                    position=gh_position,
+                                    position=int(gh_position) if isinstance(gh_position, int) else None,
+                                    line=int(gh_line) if isinstance(gh_line, int) else None,
                                     body=review_body,
                                 )
                                 db.upsert_mirrored_comment(

@@ -25,6 +25,7 @@ from .sync_upstream import run_sync_worker
 from .utils import constant_time_equals, hmac_sha256_hex
 from .clients import GitHubClient, CodebergClient
 from .comments import MirrorComment, format_mirrored_comment
+from .diff_positions import extract_unified_diff_file_patch, unified_diff_position_to_anchor
 
 
 log = logging.getLogger("codeberg_bridge.app")
@@ -217,7 +218,6 @@ async def _ensure_github_review_root_for_codeberg_thread(
     root_url = root_rc.get("html_url") or ""
     root_path = thread_info.path or root_rc.get("path")
     root_position = thread_info.position or root_rc.get("position")
-    root_line = thread_info.line or root_rc.get("line") or root_rc.get("original_line")
     root_commit = last_synced_commit or thread_info.commit_id or root_rc.get("commit_id")
 
     if not (isinstance(root_path, str) and root_path and isinstance(root_commit, str) and root_commit):
@@ -228,9 +228,53 @@ async def _ensure_github_review_root_for_codeberg_thread(
                 "pr": codeberg_pr_number,
                 "root_id": thread_info.thread_root_id,
                 "path": root_path,
-                "line": root_line,
                 "position": root_position,
                 "commit_id_present": bool(root_commit),
+            },
+        )
+        return None
+    if not (isinstance(root_position, int) and root_position > 0):
+        log.warning(
+            "codeberg_review_root_missing_position",
+            extra={
+                "repo": codeberg_repo,
+                "pr": codeberg_pr_number,
+                "root_id": thread_info.thread_root_id,
+                "path": root_path,
+                "position": root_position,
+            },
+        )
+        return None
+
+    diff_text = await codeberg.get_pull_diff_text(repo=codeberg_repo, number=codeberg_pr_number)
+    if not diff_text:
+        log.warning(
+            "codeberg_review_root_missing_diff",
+            extra={"repo": codeberg_repo, "pr": codeberg_pr_number, "root_id": thread_info.thread_root_id},
+        )
+        return None
+    file_patch = extract_unified_diff_file_patch(diff_text=diff_text, path=root_path)
+    if not file_patch:
+        log.warning(
+            "codeberg_review_root_file_missing_in_diff",
+            extra={
+                "repo": codeberg_repo,
+                "pr": codeberg_pr_number,
+                "root_id": thread_info.thread_root_id,
+                "path": root_path,
+            },
+        )
+        return None
+    anchor = unified_diff_position_to_anchor(file_patch_lines=file_patch, position=int(root_position))
+    if not anchor:
+        log.warning(
+            "codeberg_review_root_unable_to_anchor",
+            extra={
+                "repo": codeberg_repo,
+                "pr": codeberg_pr_number,
+                "root_id": thread_info.thread_root_id,
+                "path": root_path,
+                "position": int(root_position),
             },
         )
         return None
@@ -250,8 +294,9 @@ async def _ensure_github_review_root_for_codeberg_thread(
             pull_number=github_pr_number,
             commit_id=root_commit,
             path=root_path,
-            position=int(root_position) if isinstance(root_position, int) and root_position > 0 else None,
-            line=int(root_line) if isinstance(root_line, int) and root_line > 0 else None,
+            position=None,
+            line=int(anchor.line),
+            side=str(anchor.side),
             body=body,
         )
     except Exception:
@@ -742,6 +787,50 @@ async def webhook_codeberg(request: Request, background: BackgroundTasks) -> Res
                                     continue
 
                                 if isinstance(path, str) and path and isinstance(review_commit, str) and review_commit:
+                                    line_to_use: int | None = int(ln) if isinstance(ln, int) and ln > 0 else None
+                                    side_to_use: str | None = None
+                                    if line_to_use is None and isinstance(pos, int) and pos > 0:
+                                        try:
+                                            diff_text = await cb.get_pull_diff_text(
+                                                repo=mirror.codeberg_repo, number=pr_number
+                                            )
+                                            file_patch = (
+                                                extract_unified_diff_file_patch(diff_text=diff_text or "", path=path)
+                                                if diff_text
+                                                else None
+                                            )
+                                            anchor = (
+                                                unified_diff_position_to_anchor(
+                                                    file_patch_lines=file_patch, position=int(pos)
+                                                )
+                                                if file_patch
+                                                else None
+                                            )
+                                            if anchor:
+                                                line_to_use = int(anchor.line)
+                                                side_to_use = str(anchor.side)
+                                        except Exception:
+                                            log.exception(
+                                                "codeberg_review_comment_anchor_lookup_failed",
+                                                extra={
+                                                    "repo": mirror.codeberg_repo,
+                                                    "pr": pr_number,
+                                                    "path": path,
+                                                    "position": pos,
+                                                },
+                                            )
+                                    if line_to_use is None:
+                                        log.warning(
+                                            "codeberg_review_comment_missing_anchor",
+                                            extra={
+                                                "repo": mirror.codeberg_repo,
+                                                "pr": pr_number,
+                                                "path": path,
+                                                "line": ln,
+                                                "position": pos,
+                                            },
+                                        )
+                                        continue
                                     try:
                                         created = await gh.create_review_comment(
                                             repo=mirror.github_repo,
@@ -749,7 +838,8 @@ async def webhook_codeberg(request: Request, background: BackgroundTasks) -> Res
                                             commit_id=str(review_commit),
                                             path=path,
                                             position=None,
-                                            line=int(ln) if isinstance(ln, int) and ln > 0 else None,
+                                            line=int(line_to_use),
+                                            side=side_to_use,
                                             body=mirrored_body,
                                         )
                                     except httpx.HTTPStatusError as e:

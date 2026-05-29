@@ -11,6 +11,7 @@ from .clients import CodebergClient, GitHubClient
 from .comments import MirrorComment, format_mirrored_comment
 from .config import AppConfig, LoadedSecrets, MirrorConfig
 from .db import Database
+from .diff_positions import extract_unified_diff_file_patch, unified_diff_position_to_anchor
 from .utils import parse_duration_seconds
 
 
@@ -298,6 +299,7 @@ async def mirror_comments_once(
                 cb_rc_to_root[int(rc["id"])] = root_id
 
         # Now mirror each new review comment to GitHub.
+        cb_diff_text: str | None = None
         for entries in cb_thread_map.values():
             root_rc = entries[0][2]
             root_id = int(root_rc["id"])
@@ -337,23 +339,40 @@ async def mirror_comments_once(
                 if is_root:
                     # Mirror as a new GitHub inline review comment.
                     path = root_rc.get("path")
-                    line = root_rc.get("line") or root_rc.get("original_line")
                     position = root_rc.get("position")
-                    # GitHub "position" is diff-specific and often not compatible with
-                    # Codeberg/Gitea's stored position. Prefer line anchoring when present.
-                    gh_line = line if isinstance(line, int) and line > 0 else None
-                    # Do not attempt to translate Codeberg/Gitea `position` to GitHub `position`.
-                    # It is diff-specific and frequently fails to resolve on GitHub.
-                    gh_position = None
-                    if path and m.last_synced_commit and gh_line is not None:
+                    if (
+                        isinstance(path, str)
+                        and path
+                        and isinstance(position, int)
+                        and position > 0
+                        and m.last_synced_commit
+                    ):
                         try:
+                            # Codeberg/Gitea review comments use a diff-local `position` that is
+                            # not compatible with GitHub. Translate it by parsing the Codeberg
+                            # PR `.diff` for this PR and anchoring by (line, side) on GitHub.
+                            if cb_diff_text is None:
+                                cb_diff_text = await codeberg.get_pull_diff_text(
+                                    repo=mirror.codeberg_repo, number=codeberg_pr_number
+                                )
+                            if not cb_diff_text:
+                                raise RuntimeError("missing_codeberg_diff")
+                            file_patch = extract_unified_diff_file_patch(diff_text=cb_diff_text, path=path)
+                            if not file_patch:
+                                raise RuntimeError("missing_file_patch_in_diff")
+                            anchor = unified_diff_position_to_anchor(
+                                file_patch_lines=file_patch, position=int(position)
+                            )
+                            if not anchor:
+                                raise RuntimeError("unable_to_anchor_position")
                             created_gh = await github.create_review_comment(
                                 repo=mirror.github_repo,
                                 pull_number=github_pr_number,
                                 commit_id=m.last_synced_commit,
                                 path=path,
-                                position=int(gh_position) if isinstance(gh_position, int) else None,
-                                line=int(gh_line) if isinstance(gh_line, int) else None,
+                                position=None,
+                                line=int(anchor.line),
+                                side=str(anchor.side),
                                 body=rc_body,
                             )
                             db.upsert_mirrored_comment(
@@ -381,8 +400,7 @@ async def mirror_comments_once(
                                     "rc_id": rc_id,
                                     "path": path,
                                     "commit_id": m.last_synced_commit,
-                                    "line": gh_line,
-                                    "position": gh_position,
+                                    "position": position,
                                     "status": getattr(e.response, "status_code", None),
                                     "body": (getattr(e.response, "text", "") or "")[:500],
                                 },
@@ -402,7 +420,7 @@ async def mirror_comments_once(
                             )
                     else:
                         log.warning(
-                            "codeberg_review_root_missing_line_anchor",
+                            "codeberg_review_root_missing_position_anchor",
                             extra={
                                 "mirror": mirror.name,
                                 "codeberg_repo": mirror.codeberg_repo,
@@ -411,7 +429,6 @@ async def mirror_comments_once(
                                 "github_pr": github_pr_number,
                                 "rc_id": rc_id,
                                 "path": path,
-                                "codeberg_line": line,
                                 "codeberg_position": position,
                                 "commit_id": m.last_synced_commit,
                             },

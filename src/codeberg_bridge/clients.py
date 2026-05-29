@@ -88,6 +88,26 @@ class CodebergClient:
             state=data.get("state") or "unknown",
         )
 
+    async def get_pull_diff_text(self, *, repo: str, number: int) -> str | None:
+        """
+        Fetch the `.diff` text for a Codeberg/Gitea pull request.
+
+        This is used to translate review-comment `position` values into (line, side)
+        anchors for GitHub review comments.
+        """
+        owner, name = repo.split("/", 1)
+        url = f"{self._base_url}/api/v1/repos/{owner}/{name}/pulls/{number}"
+        async with httpx.AsyncClient(timeout=30) as client:
+            r = await client.get(url, headers=self._headers())
+            r.raise_for_status()
+            pr = r.json() or {}
+            diff_url = pr.get("diff_url")
+            if not isinstance(diff_url, str) or not diff_url:
+                return None
+            dr = await client.get(diff_url, headers=self._headers())
+            dr.raise_for_status()
+            return dr.text
+
     async def list_pull_requests(
         self, *, repo: str, state: str = "open", page: int = 1, limit: int = 50
     ) -> list[CodebergPRListItem]:

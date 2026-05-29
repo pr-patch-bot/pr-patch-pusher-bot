@@ -16,3 +16,4 @@ repos/
 .gitdir/
 testing.sh
 config.example.yml.save
+gitw

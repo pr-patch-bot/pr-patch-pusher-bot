@@ -2,12 +2,14 @@ from __future__ import annotations
 
 import logging
 import asyncio
+import os
 
 from .clients import CodebergClient, GitHubClient
 from .config import AppConfig, LoadedSecrets, MirrorConfig
 from .db import Database
 from .git_ops import ensure_repo, get_head_sha, sync_branch
 from .utils import sanitize_branch_component
+from .utils import parse_duration_seconds
 
 
 log = logging.getLogger("codeberg_bridge.mirror")
@@ -79,6 +81,21 @@ async def _mirror_pr_inner(
     github = GitHubClient(token=secrets.github_token)
 
     pr = await codeberg.get_pull_request(repo=mirror.codeberg_repo, number=codeberg_pr_number)
+
+    # Fun (disabled by default): optionally delay mirroring when a marker is present
+    # in the Codeberg PR title/body. Enable by setting:
+    #   DEBUG_DELAY_MARKER='!customerPaySubscription'
+    #   DEBUG_DELAY_DURATION='1m'
+    marker = os.environ.get("DEBUG_DELAY_MARKER", "").strip()
+    duration = os.environ.get("DEBUG_DELAY_DURATION", "").strip()
+    if marker and duration and (marker in pr.title or marker in pr.body):
+        try:
+            delay_s = parse_duration_seconds(duration)
+        except Exception:
+            delay_s = 60
+        log.info("debug_delay_enabled", extra={"delay_s": delay_s, "marker": marker, "pr": pr.number})
+        await asyncio.sleep(delay_s)
+
     if mirror.allowed_codeberg_users and pr.author not in set(mirror.allowed_codeberg_users):
         log.info("skip_pr_user_not_allowed", extra={"author": pr.author, "pr": pr.number})
         return

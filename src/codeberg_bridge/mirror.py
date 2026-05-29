@@ -193,13 +193,26 @@ async def _mirror_pr_inner(
         log.info("updated_github_pr", extra={"github_pr": existing.number, "head_sha": head_sha})
         return
 
-    created = await github.create_pr(
-        upstream_repo=mirror.github_repo,
-        title=title,
-        body=body,
-        head=head,
-        base=github_base_branch,
-    )
+    try:
+        created = await github.create_pr(
+            upstream_repo=mirror.github_repo,
+            title=title,
+            body=body,
+            head=head,
+            base=github_base_branch,
+        )
+    except httpx.HTTPStatusError as e:
+        log.error(
+            "github_pr_create_failed",
+            extra={
+                "status": getattr(e.response, "status_code", None),
+                "body": (getattr(e.response, "text", "") or "")[:500],
+                "upstream_repo": mirror.github_repo,
+                "head": head,
+                "base": github_base_branch,
+            },
+        )
+        raise
     if db:
         db.upsert_mapping(
             codeberg_repo=mirror.codeberg_repo,

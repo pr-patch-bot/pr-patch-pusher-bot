@@ -74,7 +74,9 @@ async def lifespan(app: FastAPI):
             )
         if mirror.backfill_codeberg_open_prs_interval:
             tasks.append(
-                asyncio.create_task(run_backfill_worker(config=config, secrets=secrets, mirror=mirror))
+                asyncio.create_task(
+                    run_backfill_worker(config=config, secrets=secrets, db=db, mirror=mirror)
+                )
             )
         if mirror.mirror_comments_interval:
             tasks.append(

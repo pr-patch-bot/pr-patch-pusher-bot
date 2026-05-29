@@ -5,6 +5,7 @@ import logging
 
 from .clients import CodebergClient
 from .config import AppConfig, LoadedSecrets, MirrorConfig
+from .db import Database
 from .clients import GitHubClient
 from .mirror import mirror_pr
 from .mirror import _mirror_branch_name
@@ -18,6 +19,7 @@ async def backfill_once(
     *,
     config: AppConfig,
     secrets: LoadedSecrets,
+    db: Database | None,
     mirror: MirrorConfig,
 ) -> None:
     interval = mirror.backfill_codeberg_open_prs_interval
@@ -53,7 +55,7 @@ async def backfill_once(
                 await mirror_pr(
                     config=config,
                     secrets=secrets,
-                    db=None,
+                    db=db,
                     mirror=mirror,
                     codeberg_pr_number=int(pr.number),
                 )
@@ -70,6 +72,7 @@ async def run_backfill_worker(
     *,
     config: AppConfig,
     secrets: LoadedSecrets,
+    db: Database | None,
     mirror: MirrorConfig,
 ) -> None:
     interval = mirror.backfill_codeberg_open_prs_interval
@@ -89,7 +92,7 @@ async def run_backfill_worker(
 
     while True:
         try:
-            await backfill_once(config=config, secrets=secrets, mirror=mirror)
+            await backfill_once(config=config, secrets=secrets, db=db, mirror=mirror)
         except Exception:
             log.exception(
                 "backfill_failed",

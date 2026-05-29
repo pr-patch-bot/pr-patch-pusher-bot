@@ -216,6 +216,31 @@ async def _mirror_pr_inner(
             },
         )
         raise
+
+    # Best-effort: leave a marker comment on Codeberg so contributors can find the mirror.
+    if secrets.codeberg_token:
+        try:
+            await codeberg.create_issue_comment(
+                repo=mirror.codeberg_repo,
+                issue_number=pr.number,
+                body="\n".join(
+                    [
+                        f"Your pull request has been mirrored to GitHub: {created.html_url}",
+                        "",
+                        "<!-- cbb:mirror src=bridge_notice id=mirrored_pr -->",
+                    ]
+                ),
+            )
+        except Exception:
+            log.exception(
+                "codeberg_mirror_notice_failed",
+                extra={
+                    "codeberg_repo": mirror.codeberg_repo,
+                    "codeberg_pr": pr.number,
+                    "github_pr": created.number,
+                },
+            )
+
     if db:
         db.upsert_mapping(
             codeberg_repo=mirror.codeberg_repo,

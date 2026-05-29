@@ -84,6 +84,13 @@ async def mirror_comments_once(
         # Phase 1: Codeberg issue comments -> GitHub issue comments
         page = 1
         seen_codeberg_comment_ids: set[int] = set()
+        cursor_codeberg_issue = db.get_comment_cursor(
+            codeberg_repo=mirror.codeberg_repo,
+            codeberg_pr_number=codeberg_pr_number,
+            github_repo=mirror.github_repo,
+            platform="codeberg_issue",
+        )
+        max_seen_codeberg_issue = cursor_codeberg_issue
         while True:
             comments = await codeberg.list_issue_comments(
                 repo=mirror.codeberg_repo, issue_number=codeberg_pr_number, page=page
@@ -108,9 +115,13 @@ async def mirror_comments_once(
                 )
                 break
             for c in comments:
+                if c.id > max_seen_codeberg_issue:
+                    max_seen_codeberg_issue = c.id
                 if codeberg_bot and c.author == codeberg_bot:
                     continue
                 if _has_marker(c.body):
+                    continue
+                if c.id <= cursor_codeberg_issue:
                     continue
                 # This Codeberg comment may be mirrored either as a GitHub issue comment
                 # or as a GitHub review-thread reply (phase 3). Avoid duplicates by
@@ -180,11 +191,29 @@ async def mirror_comments_once(
                     dst_platform="github_issue",
                     dst_comment_id=created_issue.id,
                 )
+            if len(comments) < 50:
+                break
             page += 1
+        if max_seen_codeberg_issue > cursor_codeberg_issue:
+            db.set_comment_cursor(
+                codeberg_repo=mirror.codeberg_repo,
+                codeberg_pr_number=codeberg_pr_number,
+                github_repo=mirror.github_repo,
+                github_pr_number=github_pr_number,
+                platform="codeberg_issue",
+                last_seen_id=max_seen_codeberg_issue,
+            )
 
         # Phase 1: GitHub issue comments -> Codeberg issue comments
         page = 1
         seen_github_issue_comment_ids: set[int] = set()
+        cursor_github_issue = db.get_comment_cursor(
+            codeberg_repo=mirror.codeberg_repo,
+            codeberg_pr_number=codeberg_pr_number,
+            github_repo=mirror.github_repo,
+            platform="github_issue",
+        )
+        max_seen_github_issue = cursor_github_issue
         while True:
             comments = await github.list_issue_comments(
                 repo=mirror.github_repo, issue_number=github_pr_number, page=page
@@ -209,9 +238,13 @@ async def mirror_comments_once(
                 )
                 break
             for c in comments:
+                if c.id > max_seen_github_issue:
+                    max_seen_github_issue = c.id
                 if c.author == github_bot:
                     continue
                 if _has_marker(c.body):
+                    continue
+                if c.id <= cursor_github_issue:
                     continue
                 if db.has_mirrored_comment(
                     codeberg_repo=mirror.codeberg_repo,
@@ -244,11 +277,29 @@ async def mirror_comments_once(
                     dst_platform="codeberg_issue",
                     dst_comment_id=created.id,
                 )
+            if len(comments) < 100:
+                break
             page += 1
+        if max_seen_github_issue > cursor_github_issue:
+            db.set_comment_cursor(
+                codeberg_repo=mirror.codeberg_repo,
+                codeberg_pr_number=codeberg_pr_number,
+                github_repo=mirror.github_repo,
+                github_pr_number=github_pr_number,
+                platform="github_issue",
+                last_seen_id=max_seen_github_issue,
+            )
 
         # Phase 2: GitHub inline review comments -> Codeberg as normal issue comments (one-way)
         page = 1
         seen_github_review_comment_ids: set[int] = set()
+        cursor_github_review = db.get_comment_cursor(
+            codeberg_repo=mirror.codeberg_repo,
+            codeberg_pr_number=codeberg_pr_number,
+            github_repo=mirror.github_repo,
+            platform="github_review",
+        )
+        max_seen_github_review = cursor_github_review
         while True:
             comments = await github.list_review_comments(
                 repo=mirror.github_repo, pull_number=github_pr_number, page=page
@@ -273,9 +324,13 @@ async def mirror_comments_once(
                 )
                 break
             for c in comments:
+                if c.id > max_seen_github_review:
+                    max_seen_github_review = c.id
                 if c.author == github_bot:
                     continue
                 if _has_marker(c.body):
+                    continue
+                if c.id <= cursor_github_review:
                     continue
                 if db.has_mirrored_comment(
                     codeberg_repo=mirror.codeberg_repo,
@@ -309,7 +364,18 @@ async def mirror_comments_once(
                     dst_platform="codeberg_issue",
                     dst_comment_id=created.id,
                 )
+            if len(comments) < 100:
+                break
             page += 1
+        if max_seen_github_review > cursor_github_review:
+            db.set_comment_cursor(
+                codeberg_repo=mirror.codeberg_repo,
+                codeberg_pr_number=codeberg_pr_number,
+                github_repo=mirror.github_repo,
+                github_pr_number=github_pr_number,
+                platform="github_review",
+                last_seen_id=max_seen_github_review,
+            )
 
 
 async def run_comments_mirror_worker(

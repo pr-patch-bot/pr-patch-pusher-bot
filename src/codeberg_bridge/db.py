@@ -35,6 +35,18 @@ CREATE TABLE IF NOT EXISTS mirrored_comments (
   updated_at INTEGER NOT NULL,
   UNIQUE(codeberg_repo, codeberg_pr_number, github_repo, src_platform, src_comment_id, dst_platform)
 );
+
+CREATE TABLE IF NOT EXISTS comment_cursors (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  codeberg_repo TEXT NOT NULL,
+  codeberg_pr_number INTEGER NOT NULL,
+  github_repo TEXT NOT NULL,
+  github_pr_number INTEGER NOT NULL,
+  platform TEXT NOT NULL,
+  last_seen_id INTEGER NOT NULL DEFAULT 0,
+  updated_at INTEGER NOT NULL,
+  UNIQUE(codeberg_repo, codeberg_pr_number, github_repo, platform)
+);
 """
 
 
@@ -299,6 +311,66 @@ class Database:
                     dst_platform,
                     int(dst_comment_id),
                     now,
+                    now,
+                ),
+            )
+
+    def get_comment_cursor(
+        self,
+        *,
+        codeberg_repo: str,
+        codeberg_pr_number: int,
+        github_repo: str,
+        platform: str,
+    ) -> int:
+        with self.connect() as conn:
+            row = conn.execute(
+                """
+                SELECT last_seen_id
+                FROM comment_cursors
+                WHERE codeberg_repo=? AND codeberg_pr_number=? AND github_repo=? AND platform=?
+                """,
+                (codeberg_repo, int(codeberg_pr_number), github_repo, platform),
+            ).fetchone()
+        if not row:
+            return 0
+        try:
+            return int(row["last_seen_id"])
+        except Exception:
+            return 0
+
+    def set_comment_cursor(
+        self,
+        *,
+        codeberg_repo: str,
+        codeberg_pr_number: int,
+        github_repo: str,
+        github_pr_number: int,
+        platform: str,
+        last_seen_id: int,
+    ) -> None:
+        now = int(time.time())
+        with self.connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO comment_cursors (
+                  codeberg_repo, codeberg_pr_number,
+                  github_repo, github_pr_number,
+                  platform, last_seen_id, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(codeberg_repo, codeberg_pr_number, github_repo, platform)
+                DO UPDATE SET
+                  github_pr_number=excluded.github_pr_number,
+                  last_seen_id=excluded.last_seen_id,
+                  updated_at=excluded.updated_at
+                """,
+                (
+                    codeberg_repo,
+                    int(codeberg_pr_number),
+                    github_repo,
+                    int(github_pr_number),
+                    platform,
+                    int(last_seen_id),
                     now,
                 ),
             )

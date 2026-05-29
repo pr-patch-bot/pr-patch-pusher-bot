@@ -142,6 +142,14 @@ Additional for Phase 3 (GitHub inline anchoring):
 
 Rule: always be able to fall back to a normal PR conversation comment when anchor metadata is missing or invalid.
 
+## Cursors / scaling
+
+Polling can be chatty if every interval re-fetches all comment pages. The bridge maintains a per-PR cursor table:
+
+- `comment_cursors` stores `last_seen_id` per source stream (`codeberg_issue`, `github_issue`, `github_review`).
+
+During polling, the worker skips comments with `id <= last_seen_id` and updates the cursor to the maximum seen id.
+
 ## Gotchas
 
 - Markdown differences: keep transformations minimal; prefer “quote + link back”.

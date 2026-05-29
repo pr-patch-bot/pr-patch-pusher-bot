@@ -348,6 +348,9 @@ async def webhook_codeberg(request: Request, background: BackgroundTasks) -> Res
                 extra={"reason": "no_mirror", "repo": repo, "pr": pr_number},
             )
             return Response(status_code=202, content="no mirror configured")
+        allowed = set(mirror.allowed_codeberg_users or [])
+        if allowed and comment_user not in allowed:
+            return Response(status_code=202, content="user not allowed")
 
         mapping = db.get_mapping(
             codeberg_repo=mirror.codeberg_repo,
@@ -495,6 +498,9 @@ async def webhook_codeberg(request: Request, background: BackgroundTasks) -> Res
     mirror = _get_mirror_for_repo(config, repo)
     if not mirror:
         return Response(status_code=202, content="no mirror configured")
+    allowed = set(mirror.allowed_codeberg_users or [])
+    if allowed and comment_user not in allowed:
+        return Response(status_code=202, content="user not allowed")
 
     mapping = db.get_mapping(
         codeberg_repo=mirror.codeberg_repo,

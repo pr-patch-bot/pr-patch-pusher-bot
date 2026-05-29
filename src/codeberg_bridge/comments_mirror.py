@@ -75,6 +75,7 @@ async def mirror_comments_once(
         )
 
     mappings = db.list_open_mappings(codeberg_repo=mirror.codeberg_repo, github_repo=mirror.github_repo)
+    allowed_codeberg_users = set(mirror.allowed_codeberg_users or [])
     for m in mappings:
         if not m.github_pr_number:
             continue
@@ -118,6 +119,8 @@ async def mirror_comments_once(
                 if c.id > max_seen_codeberg_issue:
                     max_seen_codeberg_issue = c.id
                 if codeberg_bot and c.author == codeberg_bot:
+                    continue
+                if allowed_codeberg_users and c.author not in allowed_codeberg_users:
                     continue
                 if _has_marker(c.body):
                     continue

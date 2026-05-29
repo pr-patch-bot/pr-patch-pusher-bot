@@ -418,7 +418,7 @@ async def mirror_comments_once(
                         line=int(c.line),
                         body=mirrored_body,
                     )
-                    created_id = int(created_review.id) if created_review.id else int(c.id)
+                    created_id = int(created_review.id) if created_review.id else 0
                     dst_platform = "codeberg_review"
                     mirrored_counts["gh_review_to_cb_inline"] += 1
                 else:
@@ -428,6 +428,44 @@ async def mirror_comments_once(
                     created_id = created_issue.id
                     dst_platform = "codeberg_issue"
                     mirrored_counts["gh_review_to_cb_issue"] += 1
+
+                # If the create-review call didn't return a concrete comment id, resolve it by
+                # fetching the newest review comments and matching by path/body.
+                if dst_platform == "codeberg_review" and created_id == 0 and c.path:
+                    try:
+                        reviews = await codeberg.list_pull_reviews(
+                            repo=mirror.codeberg_repo, pull_number=codeberg_pr_number, page=1, limit=5
+                        )
+                        for r in reviews:
+                            rid = r.get("id")
+                            if not isinstance(rid, int):
+                                continue
+                            rcomments = await codeberg.list_pull_review_comments(
+                                repo=mirror.codeberg_repo, pull_number=codeberg_pr_number, review_id=rid
+                            )
+                            for rc in rcomments or []:
+                                if rc.get("path") != c.path:
+                                    continue
+                                if (rc.get("body") or "").strip() != mirrored_body.strip():
+                                    continue
+                                rcid = rc.get("id")
+                                if isinstance(rcid, int) and rcid > 0:
+                                    created_id = rcid
+                                    break
+                            if created_id:
+                                break
+                    except Exception:
+                        log.exception(
+                            "codeberg_review_comment_id_resolve_failed",
+                            extra={
+                                "mirror": mirror.name,
+                                "codeberg_repo": mirror.codeberg_repo,
+                                "codeberg_pr": codeberg_pr_number,
+                                "github_repo": mirror.github_repo,
+                                "github_pr": github_pr_number,
+                                "github_review_comment": c.id,
+                            },
+                        )
 
                 db.upsert_mirrored_comment(
                     codeberg_repo=mirror.codeberg_repo,

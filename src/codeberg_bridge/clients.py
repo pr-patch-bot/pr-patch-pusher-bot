@@ -212,6 +212,25 @@ class CodebergClient:
         html_url = data.get("html_url") or ""
         return CodebergPullReviewComment(id=rid, html_url=html_url)
 
+    async def list_pull_reviews(self, *, repo: str, pull_number: int, page: int = 1, limit: int = 50) -> list[dict]:
+        owner, name = repo.split("/", 1)
+        url = f"{self._base_url}/api/v1/repos/{owner}/{name}/pulls/{pull_number}/reviews"
+        params = {"page": page, "limit": limit}
+        async with httpx.AsyncClient(timeout=30) as client:
+            r = await client.get(url, headers=self._headers(), params=params)
+            r.raise_for_status()
+            return r.json() or []
+
+    async def list_pull_review_comments(
+        self, *, repo: str, pull_number: int, review_id: int
+    ) -> list[dict]:
+        owner, name = repo.split("/", 1)
+        url = f"{self._base_url}/api/v1/repos/{owner}/{name}/pulls/{pull_number}/reviews/{int(review_id)}/comments"
+        async with httpx.AsyncClient(timeout=30) as client:
+            r = await client.get(url, headers=self._headers())
+            r.raise_for_status()
+            return r.json() or []
+
 
 @dataclass(frozen=True)
 class GitHubPR:

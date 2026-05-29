@@ -140,7 +140,7 @@ def sync_branch(
         ["checkout", "--quiet", "-B", mirror_branch, "FETCH_HEAD"], cwd=repo_path
     )
     _run_git_with_retries(
-        ["push", "--quiet", "--force-with-lease", "fork", f"{mirror_branch}:{mirror_branch}"],
+        ["push", "--quiet", "--force", "fork", f"{mirror_branch}:{mirror_branch}"],
         cwd=repo_path,
     )
 

@@ -740,15 +740,50 @@ async def webhook_codeberg(request: Request, background: BackgroundTasks) -> Res
                                     continue
 
                                 if isinstance(path, str) and path and isinstance(review_commit, str) and review_commit:
-                                    created = await gh.create_review_comment(
-                                        repo=mirror.github_repo,
-                                        pull_number=github_pr_number,
-                                        commit_id=str(review_commit),
-                                        path=path,
-                                        position=int(pos) if isinstance(pos, int) and pos > 0 else None,
-                                        line=int(ln) if isinstance(ln, int) and ln > 0 else None,
-                                        body=mirrored_body,
-                                    )
+                                    try:
+                                        created = await gh.create_review_comment(
+                                            repo=mirror.github_repo,
+                                            pull_number=github_pr_number,
+                                            commit_id=str(review_commit),
+                                            path=path,
+                                            position=int(pos) if isinstance(pos, int) and pos > 0 else None,
+                                            line=int(ln) if isinstance(ln, int) and ln > 0 else None,
+                                            body=mirrored_body,
+                                        )
+                                    except httpx.HTTPStatusError as e:
+                                        log.error(
+                                            "github_review_comment_create_failed",
+                                            extra={
+                                                "status": getattr(e.response, "status_code", None),
+                                                "body": (getattr(e.response, "text", "") or "")[:500],
+                                                "github_repo": mirror.github_repo,
+                                                "github_pr": github_pr_number,
+                                                "codeberg_repo": mirror.codeberg_repo,
+                                                "codeberg_pr": pr_number,
+                                                "codeberg_comment_id": rcid,
+                                                "commit_id": str(review_commit),
+                                                "path": path,
+                                                "line": ln,
+                                                "position": pos,
+                                            },
+                                        )
+                                        continue
+                                    except Exception:
+                                        log.exception(
+                                            "github_review_comment_create_failed",
+                                            extra={
+                                                "github_repo": mirror.github_repo,
+                                                "github_pr": github_pr_number,
+                                                "codeberg_repo": mirror.codeberg_repo,
+                                                "codeberg_pr": pr_number,
+                                                "codeberg_comment_id": rcid,
+                                                "commit_id": str(review_commit),
+                                                "path": path,
+                                                "line": ln,
+                                                "position": pos,
+                                            },
+                                        )
+                                        continue
                                     db.upsert_mirrored_comment(
                                         codeberg_repo=mirror.codeberg_repo,
                                         codeberg_pr_number=pr_number,
@@ -1152,15 +1187,52 @@ async def webhook_codeberg(request: Request, background: BackgroundTasks) -> Res
 
                 review_commit = mapping.last_synced_commit or thread_info.commit_id
                 if thread_info.path and review_commit:
-                    created = await gh.create_review_comment(
-                        repo=mirror.github_repo,
-                        pull_number=github_pr_number,
-                        commit_id=review_commit,
-                        path=thread_info.path,
-                        position=thread_info.position,
-                        line=thread_info.line,
-                        body=review_body,
-                    )
+                    try:
+                        created = await gh.create_review_comment(
+                            repo=mirror.github_repo,
+                            pull_number=github_pr_number,
+                            commit_id=review_commit,
+                            path=thread_info.path,
+                            position=thread_info.position,
+                            line=thread_info.line,
+                            body=review_body,
+                        )
+                    except httpx.HTTPStatusError as e:
+                        log.error(
+                            "github_review_comment_create_failed",
+                            extra={
+                                "status": getattr(e.response, "status_code", None),
+                                "body": (getattr(e.response, "text", "") or "")[:500],
+                                "github_repo": mirror.github_repo,
+                                "github_pr": github_pr_number,
+                                "codeberg_repo": mirror.codeberg_repo,
+                                "codeberg_pr": issue_number,
+                                "codeberg_comment_id": comment_id,
+                                "commit_id": review_commit,
+                                "path": thread_info.path,
+                                "line": thread_info.line,
+                                "position": thread_info.position,
+                                "reclassified": True,
+                            },
+                        )
+                        return
+                    except Exception:
+                        log.exception(
+                            "github_review_comment_create_failed",
+                            extra={
+                                "github_repo": mirror.github_repo,
+                                "github_pr": github_pr_number,
+                                "codeberg_repo": mirror.codeberg_repo,
+                                "codeberg_pr": issue_number,
+                                "codeberg_comment_id": comment_id,
+                                "commit_id": review_commit,
+                                "path": thread_info.path,
+                                "line": thread_info.line,
+                                "position": thread_info.position,
+                                "reclassified": True,
+                            },
+                        )
+                        return
                     db.upsert_mirrored_comment(
                         codeberg_repo=mirror.codeberg_repo,
                         codeberg_pr_number=issue_number,

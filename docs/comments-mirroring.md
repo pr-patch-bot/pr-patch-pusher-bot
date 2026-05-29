@@ -43,6 +43,13 @@ Attempt to preserve inline threads across platforms:
 
 This requires more stored metadata (see “Storage”) and careful handling of outdated diffs.
 
+Implementation note (current approach):
+
+- Codeberg does not provide a reliable “reply to comment X” field for PR comments.
+- We treat a Codeberg comment as a reply-to-inline when it contains a GitHub review comment URL/id
+  (e.g. `discussion_r123456789` / `#r123456789`), and use GitHub’s `in_reply_to` API to reply in-thread.
+  Otherwise we mirror as a normal PR conversation comment.
+
 ## Authorship model
 
 Mirrored comments are authored by the bot account on the destination platform.

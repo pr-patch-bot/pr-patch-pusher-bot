@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 
 from .clients import CodebergClient, GitHubClient
 from .comments import MirrorComment, format_mirrored_comment
@@ -13,6 +14,7 @@ from .utils import parse_duration_seconds
 log = logging.getLogger("codeberg_bridge.comments_mirror")
 
 _MARKER_NEEDLE = "<!-- cbb:mirror"
+_GITHUB_REVIEW_DISCUSSION_RE = re.compile(r"(?:discussion_r|#r)(\d+)")
 
 
 def _has_marker(body: str) -> bool:
@@ -30,6 +32,18 @@ def _inline_context_block(*, path: str | None, line: int | None, position: int |
     if not parts:
         return ""
     return "\n".join(["Inline context:", *[f"- {p}" for p in parts], ""])
+
+
+def _extract_github_review_comment_id(text: str) -> int | None:
+    if not text:
+        return None
+    m = _GITHUB_REVIEW_DISCUSSION_RE.search(text)
+    if not m:
+        return None
+    try:
+        return int(m.group(1))
+    except Exception:
+        return None
 
 
 async def mirror_comments_once(
@@ -89,7 +103,42 @@ async def mirror_comments_once(
                         body=c.body,
                     )
                 )
-                created = await github.create_issue_comment(
+                # Phase 3 best-effort: if a Codeberg comment references a GitHub inline review
+                # comment (by URL like discussion_r123), reply into that thread.
+                in_reply_to = _extract_github_review_comment_id(c.body)
+                if in_reply_to:
+                    try:
+                        created_review = await github.create_review_comment_reply(
+                            repo=mirror.github_repo,
+                            pull_number=github_pr_number,
+                            in_reply_to=in_reply_to,
+                            body=body,
+                        )
+                        db.upsert_mirrored_comment(
+                            codeberg_repo=mirror.codeberg_repo,
+                            codeberg_pr_number=codeberg_pr_number,
+                            github_repo=mirror.github_repo,
+                            github_pr_number=github_pr_number,
+                            src_platform="codeberg_issue",
+                            src_comment_id=c.id,
+                            dst_platform="github_review",
+                            dst_comment_id=created_review.id,
+                        )
+                        continue
+                    except Exception:
+                        log.exception(
+                            "comments_mirror_reply_to_review_failed",
+                            extra={
+                                "mirror": mirror.name,
+                                "github_repo": mirror.github_repo,
+                                "github_pr": github_pr_number,
+                                "codeberg_repo": mirror.codeberg_repo,
+                                "codeberg_pr": codeberg_pr_number,
+                                "in_reply_to": in_reply_to,
+                            },
+                        )
+
+                created_issue = await github.create_issue_comment(
                     repo=mirror.github_repo, issue_number=github_pr_number, body=body
                 )
                 db.upsert_mirrored_comment(
@@ -100,7 +149,7 @@ async def mirror_comments_once(
                     src_platform="codeberg_issue",
                     src_comment_id=c.id,
                     dst_platform="github_issue",
-                    dst_comment_id=created.id,
+                    dst_comment_id=created_issue.id,
                 )
             page += 1
 
@@ -229,4 +278,3 @@ async def run_comments_mirror_worker(
                 extra={"mirror": mirror.name, "github_repo": mirror.github_repo, "codeberg_repo": mirror.codeberg_repo},
             )
         await asyncio.sleep(seconds)
-

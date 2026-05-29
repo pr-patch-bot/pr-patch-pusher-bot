@@ -34,6 +34,10 @@ Reply behavior in Phase 2:
 - If a Codeberg user replies to the mirrored inline comment, mirror that reply back to GitHub as a **normal PR conversation comment** that links to the original GitHub inline comment.
 - Do not attempt to post it into the original inline thread yet (that’s Phase 3).
 
+Update: GitHub inline review comments are now best-effort mirrored to Codeberg as line-attached
+review comments when `path` + `line` are available and the mapping has `last_synced_commit`.
+If not, the bridge falls back to a normal Codeberg PR comment with a source link.
+
 ### Phase 3: Threaded inline review comment mirroring (best-effort)
 
 Attempt to preserve inline threads across platforms:

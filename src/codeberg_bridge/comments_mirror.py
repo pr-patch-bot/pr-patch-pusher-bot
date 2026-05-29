@@ -364,9 +364,26 @@ async def mirror_comments_once(
                         body=f"{context}{c.body}".strip(),
                     )
                 )
-                created = await codeberg.create_issue_comment(
-                    repo=mirror.codeberg_repo, issue_number=codeberg_pr_number, body=mirrored_body
-                )
+                created_id: int
+                dst_platform: str
+                if c.path and c.line and m.last_synced_commit:
+                    created_review = await codeberg.create_pull_review_comment(
+                        repo=mirror.codeberg_repo,
+                        pull_number=codeberg_pr_number,
+                        commit_id=m.last_synced_commit,
+                        path=c.path,
+                        line=int(c.line),
+                        body=mirrored_body,
+                    )
+                    created_id = int(created_review.id) if created_review.id else int(c.id)
+                    dst_platform = "codeberg_review"
+                else:
+                    created_issue = await codeberg.create_issue_comment(
+                        repo=mirror.codeberg_repo, issue_number=codeberg_pr_number, body=mirrored_body
+                    )
+                    created_id = created_issue.id
+                    dst_platform = "codeberg_issue"
+
                 db.upsert_mirrored_comment(
                     codeberg_repo=mirror.codeberg_repo,
                     codeberg_pr_number=codeberg_pr_number,
@@ -374,8 +391,8 @@ async def mirror_comments_once(
                     github_pr_number=github_pr_number,
                     src_platform="github_review",
                     src_comment_id=c.id,
-                    dst_platform="codeberg_issue",
-                    dst_comment_id=created.id,
+                    dst_platform=dst_platform,
+                    dst_comment_id=created_id,
                 )
             if len(comments) < 100:
                 break

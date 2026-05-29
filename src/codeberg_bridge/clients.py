@@ -39,6 +39,12 @@ class CodebergIssueComment:
     body: str
 
 
+@dataclass(frozen=True)
+class CodebergPullReviewComment:
+    id: int
+    html_url: str
+
+
 class CodebergClient:
     def __init__(self, *, base_url: str, token: str | None):
         self._base_url = base_url.rstrip("/")
@@ -154,6 +160,57 @@ class CodebergClient:
                     CodebergIssueComment(id=cid, html_url=html_url, author=author, body=body)
                 )
         return out
+
+    async def create_pull_review_comment(
+        self,
+        *,
+        repo: str,
+        pull_number: int,
+        commit_id: str,
+        path: str,
+        line: int,
+        body: str,
+    ) -> CodebergPullReviewComment:
+        # Create an inline (line-attached) review comment on a pull request by creating
+        # a "COMMENT" review that includes a single inline comment.
+        # Gitea uses new_position/old_position semantics (line numbers), not diff positions.
+        owner, name = repo.split("/", 1)
+        url = f"{self._base_url}/api/v1/repos/{owner}/{name}/pulls/{pull_number}/reviews"
+        payload = {
+            "event": "COMMENT",
+            "body": "",
+            "commit_id": commit_id,
+            "comments": [
+                {
+                    "path": path,
+                    "body": body,
+                    "old_position": 0,
+                    "new_position": int(line),
+                }
+            ],
+        }
+        async with httpx.AsyncClient(timeout=60) as client:
+            r = await client.post(url, headers=self._headers(), json=payload)
+            r.raise_for_status()
+            data = r.json() or {}
+
+        # Best-effort: the API response may include a comments list; extract an id/url if present.
+        comments = data.get("comments") or []
+        if isinstance(comments, list) and comments:
+            c0 = comments[0] or {}
+            try:
+                cid = int(c0.get("id"))
+            except Exception:
+                cid = 0
+            html_url = c0.get("html_url") or ""
+            return CodebergPullReviewComment(id=cid, html_url=html_url)
+
+        try:
+            rid = int(data.get("id"))
+        except Exception:
+            rid = 0
+        html_url = data.get("html_url") or ""
+        return CodebergPullReviewComment(id=rid, html_url=html_url)
 
 
 @dataclass(frozen=True)

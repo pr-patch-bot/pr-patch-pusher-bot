@@ -237,6 +237,7 @@ class GitHubReviewComment:
     path: str | None
     line: int | None
     position: int | None
+    in_reply_to_id: int | None
 
 
 @dataclass(frozen=True)
@@ -469,6 +470,7 @@ class GitHubClient:
             path = c.get("path")
             line = c.get("line")
             position = c.get("position")
+            in_reply_to_id = c.get("in_reply_to_id") or c.get("in_reply_to")
             out.append(
                 GitHubReviewComment(
                     id=cid,
@@ -478,6 +480,7 @@ class GitHubClient:
                     path=path if isinstance(path, str) else None,
                     line=int(line) if isinstance(line, int) else None,
                     position=int(position) if isinstance(position, int) else None,
+                    in_reply_to_id=int(in_reply_to_id) if isinstance(in_reply_to_id, int) else None,
                 )
             )
         return out
@@ -502,6 +505,7 @@ class GitHubClient:
             path=data.get("path") if isinstance(data.get("path"), str) else None,
             line=int(data["line"]) if isinstance(data.get("line"), int) else None,
             position=int(data["position"]) if isinstance(data.get("position"), int) else None,
+            in_reply_to_id=data.get("in_reply_to_id") if isinstance(data.get("in_reply_to_id"), int) else None,
         )
 
     async def create_review_comment_reply_via_replies_endpoint(
@@ -524,6 +528,7 @@ class GitHubClient:
             path=data.get("path") if isinstance(data.get("path"), str) else None,
             line=int(data["line"]) if isinstance(data.get("line"), int) else None,
             position=int(data["position"]) if isinstance(data.get("position"), int) else None,
+            in_reply_to_id=data.get("in_reply_to_id") if isinstance(data.get("in_reply_to_id"), int) else None,
         )
 
     async def create_review_comment(
@@ -561,4 +566,5 @@ class GitHubClient:
             path=data.get("path") if isinstance(data.get("path"), str) else None,
             line=int(data["line"]) if isinstance(data.get("line"), int) else None,
             position=int(data["position"]) if isinstance(data.get("position"), int) else None,
+            in_reply_to_id=data.get("in_reply_to_id") if isinstance(data.get("in_reply_to_id"), int) else None,
         )

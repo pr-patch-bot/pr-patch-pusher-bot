@@ -398,7 +398,18 @@ async def mirror_comments_once(
                 )
                 created_id: int
                 dst_platform: str
-                if c.path and c.line and m.last_synced_commit:
+                # If this is a reply in an existing GitHub inline thread, do NOT create
+                # another inline comment on Codeberg; Gitea doesn't support true inline
+                # replies via API, and it results in duplicated diff hunks. Mirror as a
+                # normal PR comment instead.
+                if c.in_reply_to_id:
+                    created_issue = await codeberg.create_issue_comment(
+                        repo=mirror.codeberg_repo, issue_number=codeberg_pr_number, body=mirrored_body
+                    )
+                    created_id = created_issue.id
+                    dst_platform = "codeberg_issue"
+                    mirrored_counts["gh_review_to_cb_issue"] += 1
+                elif c.path and c.line and m.last_synced_commit:
                     created_review = await codeberg.create_pull_review_comment(
                         repo=mirror.codeberg_repo,
                         pull_number=codeberg_pr_number,

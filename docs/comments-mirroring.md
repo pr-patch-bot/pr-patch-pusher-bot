@@ -38,6 +38,11 @@ Update: GitHub inline review comments are now best-effort mirrored to Codeberg a
 review comments when `path` + `line` are available and the mapping has `last_synced_commit`.
 If not, the bridge falls back to a normal Codeberg PR comment with a source link.
 
+Threading note:
+
+- Gitea/Codeberg review comments don’t have a stable “reply in the same thread” API equivalent to GitHub.
+- GitHub inline replies are therefore mirrored to Codeberg as normal PR comments (to avoid duplicated diff hunks).
+
 ### Phase 3: Threaded inline review comment mirroring (best-effort)
 
 Attempt to preserve inline threads across platforms:

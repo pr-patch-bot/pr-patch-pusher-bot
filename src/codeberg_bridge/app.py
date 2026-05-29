@@ -400,18 +400,30 @@ async def webhook_codeberg(request: Request, background: BackgroundTasks) -> Res
             github_pr_number = int(mapping.github_pr_number)  # type: ignore[arg-type]
             try:
                 if isinstance(in_reply_to, int) and in_reply_to > 0:
+                    # If this Codeberg inline comment is a reply, attempt to map the
+                    # parent Codeberg comment to the corresponding GitHub review comment id.
+                    mapped = db.get_mirrored_comment_dst(
+                        codeberg_repo=mirror.codeberg_repo,
+                        codeberg_pr_number=pr_number,
+                        github_repo=mirror.github_repo,
+                        src_platform="codeberg_review",
+                        src_comment_id=in_reply_to,
+                    )
+                    github_parent_id = in_reply_to
+                    if mapped and mapped[0] == "github_review":
+                        github_parent_id = mapped[1]
                     try:
                         created = await gh.create_review_comment_reply_via_replies_endpoint(
                             repo=mirror.github_repo,
                             pull_number=github_pr_number,
-                            comment_id=in_reply_to,
+                            comment_id=github_parent_id,
                             body=body,
                         )
                     except Exception:
                         created = await gh.create_review_comment_reply(
                             repo=mirror.github_repo,
                             pull_number=github_pr_number,
-                            in_reply_to=in_reply_to,
+                            in_reply_to=github_parent_id,
                             body=body,
                         )
                     db.upsert_mirrored_comment(

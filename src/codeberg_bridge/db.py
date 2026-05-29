@@ -315,6 +315,43 @@ class Database:
                 ),
             )
 
+    def get_mirrored_comment_dst(
+        self,
+        *,
+        codeberg_repo: str,
+        codeberg_pr_number: int,
+        github_repo: str,
+        src_platform: str,
+        src_comment_id: int,
+    ) -> tuple[str, int] | None:
+        with self.connect() as conn:
+            row = conn.execute(
+                """
+                SELECT dst_platform, dst_comment_id
+                FROM mirrored_comments
+                WHERE codeberg_repo=?
+                  AND codeberg_pr_number=?
+                  AND github_repo=?
+                  AND src_platform=?
+                  AND src_comment_id=?
+                ORDER BY updated_at DESC
+                LIMIT 1
+                """,
+                (
+                    codeberg_repo,
+                    int(codeberg_pr_number),
+                    github_repo,
+                    src_platform,
+                    int(src_comment_id),
+                ),
+            ).fetchone()
+        if not row:
+            return None
+        try:
+            return (str(row["dst_platform"]), int(row["dst_comment_id"]))
+        except Exception:
+            return None
+
     def get_comment_cursor(
         self,
         *,

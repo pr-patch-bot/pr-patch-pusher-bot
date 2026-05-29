@@ -402,16 +402,12 @@ async def webhook_codeberg(request: Request, background: BackgroundTasks) -> Res
                 if isinstance(in_reply_to, int) and in_reply_to > 0:
                     # If this Codeberg inline comment is a reply, attempt to map the
                     # parent Codeberg comment to the corresponding GitHub review comment id.
-                    mapped = db.get_mirrored_comment_dst(
+                    github_parent_id = db.get_github_review_id_for_codeberg_review_id(
                         codeberg_repo=mirror.codeberg_repo,
                         codeberg_pr_number=pr_number,
                         github_repo=mirror.github_repo,
-                        src_platform="codeberg_review",
-                        src_comment_id=in_reply_to,
-                    )
-                    github_parent_id = in_reply_to
-                    if mapped and mapped[0] == "github_review":
-                        github_parent_id = mapped[1]
+                        codeberg_review_comment_id=in_reply_to,
+                    ) or in_reply_to
                     try:
                         created = await gh.create_review_comment_reply_via_replies_endpoint(
                             repo=mirror.github_repo,

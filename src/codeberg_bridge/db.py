@@ -347,6 +347,50 @@ class Database:
             ).fetchone()
         if not row:
             return None
+
+    def get_github_review_id_for_codeberg_review_id(
+        self,
+        *,
+        codeberg_repo: str,
+        codeberg_pr_number: int,
+        github_repo: str,
+        codeberg_review_comment_id: int,
+    ) -> int | None:
+        """
+        When we mirror GitHub inline comments to Codeberg inline comments, the mapping row is:
+          src_platform='github_review', src_comment_id=<github_review_id>
+          dst_platform='codeberg_review', dst_comment_id=<codeberg_review_id>
+
+        For Codeberg replies that reference `in_reply_to=<codeberg_review_id>`, we need to map
+        back to the original GitHub review comment id so we can reply in-thread on GitHub.
+        """
+        with self.connect() as conn:
+            row = conn.execute(
+                """
+                SELECT src_comment_id
+                FROM mirrored_comments
+                WHERE codeberg_repo=?
+                  AND codeberg_pr_number=?
+                  AND github_repo=?
+                  AND src_platform='github_review'
+                  AND dst_platform='codeberg_review'
+                  AND dst_comment_id=?
+                ORDER BY updated_at DESC
+                LIMIT 1
+                """,
+                (
+                    codeberg_repo,
+                    int(codeberg_pr_number),
+                    github_repo,
+                    int(codeberg_review_comment_id),
+                ),
+            ).fetchone()
+        if not row:
+            return None
+        try:
+            return int(row["src_comment_id"])
+        except Exception:
+            return None
         try:
             return (str(row["dst_platform"]), int(row["dst_comment_id"]))
         except Exception:

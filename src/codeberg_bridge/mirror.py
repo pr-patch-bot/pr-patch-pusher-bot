@@ -207,6 +207,9 @@ async def _mirror_pr_inner(
             extra={
                 "status": getattr(e.response, "status_code", None),
                 "body": (getattr(e.response, "text", "") or "")[:500],
+                "codeberg_pr": pr.number,
+                "codeberg_head_ref": pr.head_ref,
+                "codeberg_base_ref": pr.base_ref,
                 "upstream_repo": mirror.github_repo,
                 "head": head,
                 "base": github_base_branch,

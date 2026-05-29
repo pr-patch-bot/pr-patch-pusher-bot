@@ -504,6 +504,7 @@ async def webhook_codeberg(request: Request, background: BackgroundTasks) -> Res
     comment_body = comment.get("body") or ""
     comment_url = comment.get("html_url") or ""
     comment_user = ((comment.get("user") or {}).get("login")) or ""
+    comment_in_reply_to = comment.get("in_reply_to") or comment.get("reply") or comment.get("reply_id")
 
     if action != "created":
         return Response(status_code=202, content="ignored action")
@@ -554,20 +555,32 @@ async def webhook_codeberg(request: Request, background: BackgroundTasks) -> Res
     async def _run_comment_mirror() -> None:
         github_pr_number = int(mapping.github_pr_number)  # type: ignore[arg-type]
         try:
-            in_reply_to = _extract_github_review_comment_id(str(comment_body))
-            if in_reply_to:
+            # If Codeberg provides an explicit reply-to id, try to map it back to the
+            # GitHub review comment thread first.
+            github_thread_id: int | None = None
+            if isinstance(comment_in_reply_to, int) and comment_in_reply_to > 0:
+                github_thread_id = db.get_github_review_id_for_codeberg_review_id(
+                    codeberg_repo=mirror.codeberg_repo,
+                    codeberg_pr_number=issue_number,
+                    github_repo=mirror.github_repo,
+                    codeberg_review_comment_id=int(comment_in_reply_to),
+                )
+            if not github_thread_id:
+                github_thread_id = _extract_github_review_comment_id(str(comment_body))
+
+            if github_thread_id:
                 try:
                     created = await gh.create_review_comment_reply_via_replies_endpoint(
                         repo=mirror.github_repo,
                         pull_number=github_pr_number,
-                        comment_id=in_reply_to,
+                        comment_id=github_thread_id,
                         body=body,
                     )
                 except Exception:
                     created = await gh.create_review_comment_reply(
                         repo=mirror.github_repo,
                         pull_number=github_pr_number,
-                        in_reply_to=in_reply_to,
+                        in_reply_to=github_thread_id,
                         body=body,
                     )
                 db.upsert_mirrored_comment(

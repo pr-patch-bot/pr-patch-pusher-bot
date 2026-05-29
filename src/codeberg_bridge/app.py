@@ -598,6 +598,15 @@ async def webhook_codeberg(request: Request, background: BackgroundTasks) -> Res
                     extra={"repo": repo, "pr": issue_number, "dst": "github_review", "dst_id": created.id},
                 )
                 return
+            log.info(
+                "codeberg_comment_thread_not_found",
+                extra={
+                    "repo": repo,
+                    "pr": issue_number,
+                    "comment_id": comment_id,
+                    "comment_in_reply_to": comment_in_reply_to,
+                },
+            )
 
             created_issue = await gh.create_issue_comment(
                 repo=mirror.github_repo, issue_number=github_pr_number, body=body

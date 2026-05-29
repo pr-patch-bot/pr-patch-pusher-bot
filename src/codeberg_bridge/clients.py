@@ -190,7 +190,11 @@ class GitHubClient:
             )
             r.raise_for_status()
             data = r.json()
-        return GitHubPR(number=int(data["number"]), html_url=data["html_url"])
+        return GitHubPR(
+            number=int(data["number"]),
+            html_url=data["html_url"],
+            state=data.get("state") or "unknown",
+        )
 
     async def update_pr_body(
         self, *, upstream_repo: str, number: int, title: str, body: str, base: str | None = None

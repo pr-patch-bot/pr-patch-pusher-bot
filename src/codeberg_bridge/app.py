@@ -5,6 +5,7 @@ import json
 import logging
 import os
 import re
+import zlib
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
@@ -38,6 +39,12 @@ def _extract_github_review_comment_id(text: str) -> int | None:
         return int(m.group(1))
     except Exception:
         return None
+
+
+def _stable_int_id(text: str) -> int:
+    # Produce a stable positive int for webhook payloads that lack a numeric comment id.
+    # SQLite schema expects integers; crc32 is sufficient for de-duping best-effort events.
+    return zlib.crc32(text.encode("utf-8")) & 0x7FFFFFFF
 
 
 def _get_mirror_for_repo(config: AppConfig, codeberg_repo: str):
@@ -202,12 +209,14 @@ async def webhook_codeberg(request: Request, background: BackgroundTasks) -> Res
         pr = payload.get("pull_request") or {}
         comment = payload.get("comment") or {}
         review = payload.get("review") or {}
+        sender = payload.get("sender") or {}
 
         pr_number = pr.get("number") or pr.get("index")
         comment_id = comment.get("id")
         comment_body = comment.get("body") or ""
         comment_url = comment.get("html_url") or ""
         comment_user = ((comment.get("user") or {}).get("login")) or ""
+        pr_url = pr.get("html_url") or ""
 
         # Some Codeberg/Gitea setups emit PR inline comment webhooks with action="created",
         # others use "reviewed" for review-related comment deliveries. Treat both as mirrorable.
@@ -227,6 +236,78 @@ async def webhook_codeberg(request: Request, background: BackgroundTasks) -> Res
             )
             return Response(status_code=400, content="missing repo/pr data")
         if not isinstance(comment_id, int) or not isinstance(comment_user, str) or not comment_user:
+            # Some Codeberg/Gitea variants emit a "review submitted" payload here without an
+            # explicit inline comment object. Best-effort mirror the review summary content.
+            review_content = review.get("content")
+            sender_login = sender.get("login")
+            if (
+                isinstance(review_content, str)
+                and review_content.strip()
+                and isinstance(sender_login, str)
+                and sender_login
+            ):
+                synth_id = _stable_int_id(f"{repo}:{pr_number}:{sender_login}:{review_content}")
+                mirror = _get_mirror_for_repo(config, repo)
+                if not mirror:
+                    return Response(status_code=202, content="no mirror configured")
+                mapping = db.get_mapping(
+                    codeberg_repo=mirror.codeberg_repo,
+                    codeberg_pr_number=pr_number,
+                    github_repo=mirror.github_repo,
+                )
+                if not mapping or not mapping.github_pr_number:
+                    return Response(status_code=202, content="no github mapping")
+                if db.has_mirrored_comment_any_dst(
+                    codeberg_repo=mirror.codeberg_repo,
+                    codeberg_pr_number=pr_number,
+                    github_repo=mirror.github_repo,
+                    src_platform="codeberg_review_summary",
+                    src_comment_id=synth_id,
+                ):
+                    return Response(status_code=202, content="already mirrored")
+
+                gh = GitHubClient(token=secrets.github_token)
+                body = format_mirrored_comment(
+                    c=MirrorComment(
+                        src_platform="codeberg_review_summary",
+                        src_author=sender_login,
+                        src_url=pr_url if isinstance(pr_url, str) else "",
+                        src_id=synth_id,
+                        body=review_content,
+                    )
+                )
+
+                async def _run_review_summary_mirror() -> None:
+                    github_pr_number = int(mapping.github_pr_number)  # type: ignore[arg-type]
+                    try:
+                        created_issue = await gh.create_issue_comment(
+                            repo=mirror.github_repo,
+                            issue_number=github_pr_number,
+                            body=body,
+                        )
+                        db.upsert_mirrored_comment(
+                            codeberg_repo=mirror.codeberg_repo,
+                            codeberg_pr_number=pr_number,
+                            github_repo=mirror.github_repo,
+                            github_pr_number=github_pr_number,
+                            src_platform="codeberg_review_summary",
+                            src_comment_id=synth_id,
+                            dst_platform="github_issue",
+                            dst_comment_id=created_issue.id,
+                        )
+                        log.info(
+                            "mirrored_codeberg_review_summary",
+                            extra={"repo": repo, "pr": pr_number, "dst_id": created_issue.id},
+                        )
+                    except Exception:
+                        log.exception(
+                            "mirror_review_summary_failed",
+                            extra={"repo": repo, "pr": pr_number, "synth_id": synth_id},
+                        )
+
+                background.add_task(_run_review_summary_mirror)
+                return Response(status_code=202, content="accepted")
+
             log.info(
                 "webhook_review_comment_ignored",
                 extra={

@@ -12,3 +12,7 @@ repos/
 
 .env
 
+# local git metadata (repo uses GIT_DIR)
+.gitdir/
+testing.sh
+config.example.yml.save

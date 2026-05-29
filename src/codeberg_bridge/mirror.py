@@ -42,11 +42,12 @@ def _pr_title(original_title: str) -> str:
     return original_title
 
 
-def _pr_body(*, pr_url: str, original_body: str) -> str:
+def _pr_body(*, pr_url: str, author: str, author_url: str, original_body: str) -> str:
     original_body = (original_body or "").strip()
+    header = f"Patch from [{author}]({author_url}): [{pr_url}]({pr_url})"
     if not original_body:
-        return f"Patch fwd from {pr_url}"
-    return "\n".join([f"Patch fwd from {pr_url}", "", original_body])
+        return header
+    return "\n".join([header, "", original_body])
 
 
 async def mirror_pr(
@@ -124,7 +125,8 @@ async def _mirror_pr_inner(
     head = f"{fork_owner}:{branch}"
     existing = await github.find_pr_by_head(upstream_repo=mirror.github_repo, head=head)
     title = _pr_title(pr.title)
-    body = _pr_body(pr_url=pr.html_url, original_body=pr.body)
+    author_url = f"{config.codeberg.base_url.rstrip('/')}/{pr.author}"
+    body = _pr_body(pr_url=pr.html_url, author=pr.author, author_url=author_url, original_body=pr.body)
 
     if existing:
         await github.update_pr_body(

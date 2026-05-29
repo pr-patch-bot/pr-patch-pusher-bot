@@ -37,27 +37,14 @@ def _mirror_branch_name(mirror: MirrorConfig, *, codeberg_repo: str, pr_number: 
 
 
 def _pr_title(original_title: str) -> str:
-    return f"[Codeberg] {original_title}"
+    return original_title
 
 
-def _pr_body(*, pr_url: str, author: str, source_branch: str) -> str:
-    return "\n".join(
-        [
-            "This pull request was mirrored automatically from Codeberg/Gitea.",
-            "",
-            "Original PR:",
-            pr_url,
-            "",
-            "Original author:",
-            author,
-            "",
-            "Original source branch:",
-            source_branch,
-            "",
-            "Do not push directly to this branch.",
-            "Updates should happen on the original Codeberg/Gitea pull request.",
-        ]
-    )
+def _pr_body(*, pr_url: str, original_body: str) -> str:
+    original_body = (original_body or "").strip()
+    if not original_body:
+        return f"Patch fwd from {pr_url}"
+    return "\n".join([f"Patch fwd from {pr_url}", "", original_body])
 
 
 async def mirror_pr(
@@ -120,7 +107,7 @@ async def _mirror_pr_inner(
     head = f"{fork_owner}:{branch}"
     existing = await github.find_pr_by_head(upstream_repo=mirror.github_repo, head=head)
     title = _pr_title(pr.title)
-    body = _pr_body(pr_url=pr.html_url, author=pr.author, source_branch=pr.head_ref)
+    body = _pr_body(pr_url=pr.html_url, original_body=pr.body)
 
     if existing:
         await github.update_pr_body(

@@ -15,6 +15,7 @@ class CodebergPRInfo:
     number: int
     title: str
     html_url: str
+    body: str
     author: str
     head_repo_clone_url: str
     head_ref: str
@@ -51,6 +52,7 @@ class CodebergClient:
             number=int(data["number"]),
             title=data["title"],
             html_url=data["html_url"],
+            body=data.get("body") or "",
             author=data["user"]["login"],
             head_repo_clone_url=data["head"]["repo"]["clone_url"],
             head_ref=data["head"]["ref"],

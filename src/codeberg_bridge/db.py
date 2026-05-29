@@ -229,6 +229,37 @@ class Database:
             ).fetchone()
         return bool(row)
 
+    def has_mirrored_comment_any_dst(
+        self,
+        *,
+        codeberg_repo: str,
+        codeberg_pr_number: int,
+        github_repo: str,
+        src_platform: str,
+        src_comment_id: int,
+    ) -> bool:
+        with self.connect() as conn:
+            row = conn.execute(
+                """
+                SELECT 1
+                FROM mirrored_comments
+                WHERE codeberg_repo=?
+                  AND codeberg_pr_number=?
+                  AND github_repo=?
+                  AND src_platform=?
+                  AND src_comment_id=?
+                LIMIT 1
+                """,
+                (
+                    codeberg_repo,
+                    int(codeberg_pr_number),
+                    github_repo,
+                    src_platform,
+                    int(src_comment_id),
+                ),
+            ).fetchone()
+        return bool(row)
+
     def upsert_mirrored_comment(
         self,
         *,

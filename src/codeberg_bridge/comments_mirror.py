@@ -112,13 +112,15 @@ async def mirror_comments_once(
                     continue
                 if _has_marker(c.body):
                     continue
-                if db.has_mirrored_comment(
+                # This Codeberg comment may be mirrored either as a GitHub issue comment
+                # or as a GitHub review-thread reply (phase 3). Avoid duplicates by
+                # checking any existing destination mapping.
+                if db.has_mirrored_comment_any_dst(
                     codeberg_repo=mirror.codeberg_repo,
                     codeberg_pr_number=codeberg_pr_number,
                     github_repo=mirror.github_repo,
                     src_platform="codeberg_issue",
                     src_comment_id=c.id,
-                    dst_platform="github_issue",
                 ):
                     continue
                 body = format_mirrored_comment(

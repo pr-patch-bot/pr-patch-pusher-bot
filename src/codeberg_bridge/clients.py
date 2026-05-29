@@ -96,6 +96,7 @@ class CodebergClient:
 class GitHubPR:
     number: int
     html_url: str
+    state: str
 
 
 @dataclass(frozen=True)
@@ -152,9 +153,9 @@ class GitHubClient:
         return fork_repo
 
     async def find_pr_by_head(
-        self, *, upstream_repo: str, head: str
+        self, *, upstream_repo: str, head: str, state: str = "open"
     ) -> GitHubPR | None:
-        params = {"state": "open", "head": head, "per_page": 1}
+        params = {"state": state, "head": head, "per_page": 1}
         async with httpx.AsyncClient(timeout=30) as client:
             r = await client.get(
                 f"https://api.github.com/repos/{upstream_repo}/pulls",
@@ -165,7 +166,11 @@ class GitHubClient:
             items = r.json()
         if not items:
             return None
-        return GitHubPR(number=int(items[0]["number"]), html_url=items[0]["html_url"])
+        return GitHubPR(
+            number=int(items[0]["number"]),
+            html_url=items[0]["html_url"],
+            state=items[0].get("state") or "unknown",
+        )
 
     async def create_pr(
         self,
@@ -191,6 +196,16 @@ class GitHubClient:
         self, *, upstream_repo: str, number: int, title: str, body: str
     ) -> None:
         payload = {"title": title, "body": body}
+        async with httpx.AsyncClient(timeout=60) as client:
+            r = await client.patch(
+                f"https://api.github.com/repos/{upstream_repo}/pulls/{number}",
+                headers=self._headers(),
+                json=payload,
+            )
+            r.raise_for_status()
+
+    async def update_pr_state(self, *, upstream_repo: str, number: int, state: str) -> None:
+        payload = {"state": state}
         async with httpx.AsyncClient(timeout=60) as client:
             r = await client.patch(
                 f"https://api.github.com/repos/{upstream_repo}/pulls/{number}",

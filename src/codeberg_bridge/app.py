@@ -142,25 +142,6 @@ async def webhook_codeberg(request: Request, background: BackgroundTasks) -> Res
                 github_repo=mirror.github_repo,
                 status="closed",
             )
-            # Best-effort cleanup of the mirrored branch in the bot fork.
-            try:
-                github = GitHubClient(token=secrets.github_token)
-                await github.delete_branch(repo=existing.github_fork_repo, branch=existing.github_branch)
-            except Exception:
-                log.exception(
-                    "branch_cleanup_failed",
-                    extra={"github_fork_repo": existing.github_fork_repo, "github_branch": existing.github_branch},
-                )
-        else:
-            # Stateless cleanup: compute expected branch and delete it from the token's fork.
-            try:
-                github = GitHubClient(token=secrets.github_token)
-                login = await github.get_authenticated_user_login()
-                branch = _mirror_branch_name(mirror, codeberg_repo=mirror.codeberg_repo, pr_number=number)
-                fork_repo = f"{login}/{mirror.github_repo.split('/', 1)[1]}"
-                await github.delete_branch(repo=fork_repo, branch=branch)
-            except Exception:
-                log.exception("branch_cleanup_failed_stateless", extra={"pr": number, "repo": mirror.github_repo})
         return Response(status_code=202, content="recorded close")
 
     async def _run_sync() -> None:

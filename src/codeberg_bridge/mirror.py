@@ -108,7 +108,11 @@ async def _mirror_pr_inner(
 
     fork_owner = fork_repo.split("/", 1)[0]
     head = f"{fork_owner}:{branch}"
-    existing = await github.find_pr_by_head(upstream_repo=mirror.github_repo, head=head)
+    existing = await github.find_pr_by_head(upstream_repo=mirror.github_repo, head=head, state="open")
+    if not existing:
+        existing = await github.find_pr_by_head(upstream_repo=mirror.github_repo, head=head, state="all")
+        if existing and (existing.state or "").lower() == "closed":
+            await github.update_pr_state(upstream_repo=mirror.github_repo, number=existing.number, state="open")
     title = _pr_title(pr.title)
     author_url = f"{config.codeberg.base_url.rstrip('/')}/{pr.author}"
     body = _pr_body(pr_url=pr.html_url, author=pr.author, author_url=author_url, original_body=pr.body)

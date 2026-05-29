@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
+import os
 
 from .clients import CodebergClient, GitHubClient
 from .comments import MirrorComment, format_mirrored_comment
@@ -15,6 +16,7 @@ log = logging.getLogger("codeberg_bridge.comments_mirror")
 
 _MARKER_NEEDLE = "<!-- cbb:mirror"
 _GITHUB_REVIEW_DISCUSSION_RE = re.compile(r"(?:discussion_r|#r)(\d+)")
+_DEFAULT_POST_DELAY_S = 2.0
 
 
 def _has_marker(body: str) -> bool:
@@ -44,6 +46,19 @@ def _extract_github_review_comment_id(text: str) -> int | None:
         return int(m.group(1))
     except Exception:
         return None
+
+
+def _post_delay_seconds() -> float:
+    raw = (os.environ.get("COMMENT_MIRROR_DELAY_SECONDS") or "").strip()
+    if not raw:
+        return _DEFAULT_POST_DELAY_S
+    try:
+        v = float(raw)
+    except Exception:
+        return _DEFAULT_POST_DELAY_S
+    if v < 0:
+        return 0.0
+    return min(v, 30.0)
 
 
 async def mirror_comments_once(
@@ -81,6 +96,14 @@ async def mirror_comments_once(
             continue
         github_pr_number = int(m.github_pr_number)
         codeberg_pr_number = int(m.codeberg_pr_number)
+        delay_s = _post_delay_seconds()
+        mirrored_counts = {
+            "cb_to_gh_issue": 0,
+            "cb_to_gh_review_reply": 0,
+            "gh_issue_to_cb": 0,
+            "gh_review_to_cb_issue": 0,
+            "gh_review_to_cb_inline": 0,
+        }
 
         # Phase 1: Codeberg issue comments -> GitHub issue comments
         page = 1
@@ -175,6 +198,9 @@ async def mirror_comments_once(
                             dst_platform="github_review",
                             dst_comment_id=created_review.id,
                         )
+                        mirrored_counts["cb_to_gh_review_reply"] += 1
+                        if delay_s:
+                            await asyncio.sleep(delay_s)
                         continue
                     except Exception:
                         log.exception(
@@ -202,6 +228,9 @@ async def mirror_comments_once(
                     dst_platform="github_issue",
                     dst_comment_id=created_issue.id,
                 )
+                mirrored_counts["cb_to_gh_issue"] += 1
+                if delay_s:
+                    await asyncio.sleep(delay_s)
             if len(comments) < 50:
                 break
             page += 1
@@ -288,6 +317,9 @@ async def mirror_comments_once(
                     dst_platform="codeberg_issue",
                     dst_comment_id=created.id,
                 )
+                mirrored_counts["gh_issue_to_cb"] += 1
+                if delay_s:
+                    await asyncio.sleep(delay_s)
             if len(comments) < 100:
                 break
             page += 1
@@ -377,12 +409,14 @@ async def mirror_comments_once(
                     )
                     created_id = int(created_review.id) if created_review.id else int(c.id)
                     dst_platform = "codeberg_review"
+                    mirrored_counts["gh_review_to_cb_inline"] += 1
                 else:
                     created_issue = await codeberg.create_issue_comment(
                         repo=mirror.codeberg_repo, issue_number=codeberg_pr_number, body=mirrored_body
                     )
                     created_id = created_issue.id
                     dst_platform = "codeberg_issue"
+                    mirrored_counts["gh_review_to_cb_issue"] += 1
 
                 db.upsert_mirrored_comment(
                     codeberg_repo=mirror.codeberg_repo,
@@ -394,6 +428,8 @@ async def mirror_comments_once(
                     dst_platform=dst_platform,
                     dst_comment_id=created_id,
                 )
+                if delay_s:
+                    await asyncio.sleep(delay_s)
             if len(comments) < 100:
                 break
             page += 1
@@ -405,6 +441,20 @@ async def mirror_comments_once(
                 github_pr_number=github_pr_number,
                 platform="github_review",
                 last_seen_id=max_seen_github_review,
+            )
+
+        if any(v for v in mirrored_counts.values()):
+            log.info(
+                "comments_mirror_synced",
+                extra={
+                    "mirror": mirror.name,
+                    "github_repo": mirror.github_repo,
+                    "github_pr": github_pr_number,
+                    "codeberg_repo": mirror.codeberg_repo,
+                    "codeberg_pr": codeberg_pr_number,
+                    "delay_s": delay_s,
+                    **mirrored_counts,
+                },
             )
 
 

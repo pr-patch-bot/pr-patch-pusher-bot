@@ -232,6 +232,38 @@ class CodebergClient:
         html_url = data.get("html_url") or ""
         return CodebergPullReviewComment(id=rid, html_url=html_url)
 
+    async def create_pull_review_comment_reply(
+        self,
+        *,
+        repo: str,
+        pull_number: int,
+        comment_id: int,
+        body: str,
+    ) -> CodebergPullReviewComment:
+        """
+        Reply to an existing pull review (inline) comment.
+
+        Some Gitea/Forgejo instances support a GitHub-like endpoint:
+          POST /repos/{owner}/{repo}/pulls/{index}/comments/{id}/replies
+
+        Codeberg may not support this endpoint yet; callers should be prepared to
+        catch HTTPStatusError (404/405) and fall back to creating another inline
+        comment anchored to the same path/line.
+        """
+        owner, name = repo.split("/", 1)
+        url = f"{self._base_url}/api/v1/repos/{owner}/{name}/pulls/{pull_number}/comments/{int(comment_id)}/replies"
+        payload = {"body": body}
+        async with httpx.AsyncClient(timeout=60) as client:
+            r = await client.post(url, headers=self._headers(), json=payload)
+            r.raise_for_status()
+            data = r.json() or {}
+        try:
+            cid = int(data.get("id"))
+        except Exception:
+            cid = 0
+        html_url = data.get("html_url") or ""
+        return CodebergPullReviewComment(id=cid, html_url=html_url)
+
     async def list_pull_reviews(self, *, repo: str, pull_number: int, page: int = 1, limit: int = 50) -> list[dict]:
         owner, name = repo.split("/", 1)
         url = f"{self._base_url}/api/v1/repos/{owner}/{name}/pulls/{pull_number}/reviews"

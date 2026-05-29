@@ -1091,40 +1091,87 @@ async def mirror_comments_once(
                     reply_path = (codeberg_root_info.path if codeberg_root_info else None) or c.path
                     reply_line = (codeberg_root_info.line if codeberg_root_info else None) or c.line
                     reply_commit = (codeberg_root_info.commit_id if codeberg_root_info else None) or m.last_synced_commit
-                    if not reply_path or reply_line is None or not reply_commit:
-                        log.warning(
-                            "github_review_reply_missing_codeberg_inline_metadata",
-                            extra={
-                                "mirror": mirror.name,
-                                "github_repo": mirror.github_repo,
-                                "github_pr": github_pr_number,
-                                "codeberg_repo": mirror.codeberg_repo,
-                                "codeberg_pr": codeberg_pr_number,
-                                "github_comment_id": c.id,
-                                "in_reply_to_id": c.in_reply_to_id,
-                                "codeberg_root_id": codeberg_root_id,
-                                "path": reply_path,
-                                "line": reply_line,
-                                "commit_id": reply_commit,
-                            },
-                        )
-                        continue
-
+                    # Prefer a true reply endpoint if the Codeberg instance supports it.
+                    # If not supported (404/405), fall back to creating another inline
+                    # comment anchored to the same location so it still groups visually.
                     try:
-                        created_review = await codeberg.create_pull_review_comment(
+                        created_reply = await codeberg.create_pull_review_comment_reply(
                             repo=mirror.codeberg_repo,
                             pull_number=codeberg_pr_number,
-                            commit_id=reply_commit,
-                            path=reply_path,
-                            line=int(reply_line),
+                            comment_id=codeberg_root_id,
                             body=mirrored_body,
                         )
-                        created_id = int(created_review.id) if created_review.id else 0
+                        created_id = int(created_reply.id) if created_reply.id else 0
                         created_review_path = reply_path
                         mirrored_counts["gh_review_to_cb_inline"] += 1
+                    except httpx.HTTPStatusError as e:
+                        if getattr(e.response, "status_code", None) not in (404, 405):
+                            log.exception(
+                                "comments_mirror_gh_review_reply_to_cb_reply_endpoint_failed",
+                                extra={
+                                    "mirror": mirror.name,
+                                    "github_repo": mirror.github_repo,
+                                    "github_pr": github_pr_number,
+                                    "codeberg_repo": mirror.codeberg_repo,
+                                    "codeberg_pr": codeberg_pr_number,
+                                    "github_comment_id": c.id,
+                                    "in_reply_to_id": c.in_reply_to_id,
+                                    "codeberg_root_id": codeberg_root_id,
+                                    "status": getattr(e.response, "status_code", None),
+                                },
+                            )
+                            continue
+                        # Not supported here; fall back.
+                        if not reply_path or reply_line is None or not reply_commit:
+                            log.warning(
+                                "github_review_reply_missing_codeberg_inline_metadata",
+                                extra={
+                                    "mirror": mirror.name,
+                                    "github_repo": mirror.github_repo,
+                                    "github_pr": github_pr_number,
+                                    "codeberg_repo": mirror.codeberg_repo,
+                                    "codeberg_pr": codeberg_pr_number,
+                                    "github_comment_id": c.id,
+                                    "in_reply_to_id": c.in_reply_to_id,
+                                    "codeberg_root_id": codeberg_root_id,
+                                    "path": reply_path,
+                                    "line": reply_line,
+                                    "commit_id": reply_commit,
+                                },
+                            )
+                            continue
+                        try:
+                            created_review = await codeberg.create_pull_review_comment(
+                                repo=mirror.codeberg_repo,
+                                pull_number=codeberg_pr_number,
+                                commit_id=reply_commit,
+                                path=reply_path,
+                                line=int(reply_line),
+                                body=mirrored_body,
+                            )
+                            created_id = int(created_review.id) if created_review.id else 0
+                            created_review_path = reply_path
+                            mirrored_counts["gh_review_to_cb_inline"] += 1
+                        except Exception:
+                            log.exception(
+                                "comments_mirror_gh_review_reply_to_cb_inline_failed",
+                                extra={
+                                    "mirror": mirror.name,
+                                    "github_repo": mirror.github_repo,
+                                    "github_pr": github_pr_number,
+                                    "codeberg_repo": mirror.codeberg_repo,
+                                    "codeberg_pr": codeberg_pr_number,
+                                    "github_comment_id": c.id,
+                                    "in_reply_to_id": c.in_reply_to_id,
+                                    "codeberg_root_id": codeberg_root_id,
+                                    "path": reply_path,
+                                    "line": reply_line,
+                                },
+                            )
+                            continue
                     except Exception:
                         log.exception(
-                            "comments_mirror_gh_review_reply_to_cb_inline_failed",
+                            "comments_mirror_gh_review_reply_to_cb_reply_endpoint_failed",
                             extra={
                                 "mirror": mirror.name,
                                 "github_repo": mirror.github_repo,
@@ -1134,8 +1181,6 @@ async def mirror_comments_once(
                                 "github_comment_id": c.id,
                                 "in_reply_to_id": c.in_reply_to_id,
                                 "codeberg_root_id": codeberg_root_id,
-                                "path": reply_path,
-                                "line": reply_line,
                             },
                         )
                         continue

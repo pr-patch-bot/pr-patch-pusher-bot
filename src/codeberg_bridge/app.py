@@ -380,6 +380,8 @@ async def webhook_codeberg(request: Request, background: BackgroundTasks) -> Res
         # Best-effort anchoring: if Codeberg provides path/position/commit_id, mirror as inline.
         path = comment.get("path")
         position = comment.get("position")
+        line = comment.get("line")
+        side = comment.get("side")
         commit_id = comment.get("commit_id") or comment.get("commit_sha") or ""
         in_reply_to = comment.get("in_reply_to")
 
@@ -398,12 +400,20 @@ async def webhook_codeberg(request: Request, background: BackgroundTasks) -> Res
             github_pr_number = int(mapping.github_pr_number)  # type: ignore[arg-type]
             try:
                 if isinstance(in_reply_to, int) and in_reply_to > 0:
-                    created = await gh.create_review_comment_reply(
-                        repo=mirror.github_repo,
-                        pull_number=github_pr_number,
-                        in_reply_to=in_reply_to,
-                        body=body,
-                    )
+                    try:
+                        created = await gh.create_review_comment_reply_via_replies_endpoint(
+                            repo=mirror.github_repo,
+                            pull_number=github_pr_number,
+                            comment_id=in_reply_to,
+                            body=body,
+                        )
+                    except Exception:
+                        created = await gh.create_review_comment_reply(
+                            repo=mirror.github_repo,
+                            pull_number=github_pr_number,
+                            in_reply_to=in_reply_to,
+                            body=body,
+                        )
                     db.upsert_mirrored_comment(
                         codeberg_repo=mirror.codeberg_repo,
                         codeberg_pr_number=pr_number,
@@ -419,17 +429,20 @@ async def webhook_codeberg(request: Request, background: BackgroundTasks) -> Res
                 if (
                     isinstance(path, str)
                     and path
-                    and isinstance(position, int)
-                    and position > 0
                     and isinstance(commit_id, str)
                     and commit_id
                 ):
+                    pos = int(position) if isinstance(position, int) and position > 0 else None
+                    ln = int(line) if isinstance(line, int) and line > 0 else None
+                    sd = side if isinstance(side, str) else None
                     created = await gh.create_review_comment(
                         repo=mirror.github_repo,
                         pull_number=github_pr_number,
                         commit_id=commit_id,
                         path=path,
-                        position=position,
+                        position=pos,
+                        line=ln,
+                        side=sd,
                         body=body,
                     )
                     db.upsert_mirrored_comment(
@@ -535,12 +548,20 @@ async def webhook_codeberg(request: Request, background: BackgroundTasks) -> Res
         try:
             in_reply_to = _extract_github_review_comment_id(str(comment_body))
             if in_reply_to:
-                created = await gh.create_review_comment_reply(
-                    repo=mirror.github_repo,
-                    pull_number=github_pr_number,
-                    in_reply_to=in_reply_to,
-                    body=body,
-                )
+                try:
+                    created = await gh.create_review_comment_reply_via_replies_endpoint(
+                        repo=mirror.github_repo,
+                        pull_number=github_pr_number,
+                        comment_id=in_reply_to,
+                        body=body,
+                    )
+                except Exception:
+                    created = await gh.create_review_comment_reply(
+                        repo=mirror.github_repo,
+                        pull_number=github_pr_number,
+                        in_reply_to=in_reply_to,
+                        body=body,
+                    )
                 db.upsert_mirrored_comment(
                     codeberg_repo=mirror.codeberg_repo,
                     codeberg_pr_number=issue_number,

@@ -151,12 +151,20 @@ async def mirror_comments_once(
                 in_reply_to = _extract_github_review_comment_id(c.body)
                 if in_reply_to:
                     try:
-                        created_review = await github.create_review_comment_reply(
-                            repo=mirror.github_repo,
-                            pull_number=github_pr_number,
-                            in_reply_to=in_reply_to,
-                            body=body,
-                        )
+                        try:
+                            created_review = await github.create_review_comment_reply_via_replies_endpoint(
+                                repo=mirror.github_repo,
+                                pull_number=github_pr_number,
+                                comment_id=in_reply_to,
+                                body=body,
+                            )
+                        except Exception:
+                            created_review = await github.create_review_comment_reply(
+                                repo=mirror.github_repo,
+                                pull_number=github_pr_number,
+                                in_reply_to=in_reply_to,
+                                body=body,
+                            )
                         db.upsert_mirrored_comment(
                             codeberg_repo=mirror.codeberg_repo,
                             codeberg_pr_number=codeberg_pr_number,

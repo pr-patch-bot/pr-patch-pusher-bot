@@ -10,6 +10,8 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
 
+import httpx
+
 from fastapi import BackgroundTasks, FastAPI, Request, Response
 
 from .config import AppConfig, LoadedSecrets, load_config, load_secrets

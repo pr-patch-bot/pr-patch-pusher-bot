@@ -128,8 +128,15 @@ async def webhook_codeberg(request: Request, background: BackgroundTasks) -> Res
             return Response(status_code=401, content="invalid signature")
 
     event = request.headers.get("X-Gitea-Event") or request.headers.get("X-Codeberg-Event") or ""
-    event_type = request.headers.get("X-Gitea-Event-Type") or request.headers.get("X-Codeberg-Event-Type") or ""
-    if event not in {"pull_request", "issue_comment"} and event_type != "pull_request_review_comment":
+    event_type = (
+        request.headers.get("X-Gitea-Event-Type")
+        or request.headers.get("X-Codeberg-Event-Type")
+        or ""
+    )
+    # Gitea can report a normalized `X-Gitea-Event` plus a more specific `X-Gitea-Event-Type`,
+    # but some setups may use the specific name directly as `X-Gitea-Event`.
+    if event not in {"pull_request", "issue_comment", "pull_request_review_comment"} and event_type != "pull_request_review_comment":
+        log.info("webhook_ignored", extra={"event": event, "event_type": event_type})
         return Response(status_code=202, content="ignored event")
 
     try:
@@ -187,8 +194,8 @@ async def webhook_codeberg(request: Request, background: BackgroundTasks) -> Res
         background.add_task(_run_sync)
         return Response(status_code=202, content="accepted")
 
-    # event_type == "pull_request_review_comment" (Codeberg/Gitea inline PR review comment)
-    if event_type == "pull_request_review_comment":
+    # pull_request_review_comment (Codeberg/Gitea inline PR review comment)
+    if event_type == "pull_request_review_comment" or event == "pull_request_review_comment":
         action = payload.get("action")
         repo = (payload.get("repository") or {}).get("full_name")
         pr = payload.get("pull_request") or {}

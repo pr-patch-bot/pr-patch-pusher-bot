@@ -106,6 +106,19 @@ async def _mirror_pr_inner(
     )
     branch = _mirror_branch_name(mirror, codeberg_repo=mirror.codeberg_repo, pr_number=pr.number)
 
+    fork_owner = fork_repo.split("/", 1)[0]
+    head = f"{fork_owner}:{branch}"
+    existing = await github.find_pr_by_head(upstream_repo=mirror.github_repo, head=head)
+    title = _pr_title(pr.title)
+    author_url = f"{config.codeberg.base_url.rstrip('/')}/{pr.author}"
+    body = _pr_body(pr_url=pr.html_url, author=pr.author, author_url=author_url, original_body=pr.body)
+
+    # If the PR already exists, update title/body even if git sync later fails.
+    if existing:
+        await github.update_pr_body(
+            upstream_repo=mirror.github_repo, number=existing.number, title=title, body=body
+        )
+
     repo_paths = ensure_repo(
         working_dir=config.git.working_directory,
         upstream_repo=mirror.github_repo,
@@ -121,17 +134,7 @@ async def _mirror_pr_inner(
     )
     head_sha = get_head_sha(repo_path=repo_paths.path)
 
-    fork_owner = fork_repo.split("/", 1)[0]
-    head = f"{fork_owner}:{branch}"
-    existing = await github.find_pr_by_head(upstream_repo=mirror.github_repo, head=head)
-    title = _pr_title(pr.title)
-    author_url = f"{config.codeberg.base_url.rstrip('/')}/{pr.author}"
-    body = _pr_body(pr_url=pr.html_url, author=pr.author, author_url=author_url, original_body=pr.body)
-
     if existing:
-        await github.update_pr_body(
-            upstream_repo=mirror.github_repo, number=existing.number, title=title, body=body
-        )
         if db:
             db.upsert_mapping(
                 codeberg_repo=mirror.codeberg_repo,

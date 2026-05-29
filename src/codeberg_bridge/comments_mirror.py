@@ -341,14 +341,16 @@ async def mirror_comments_once(
                     dst_platform="codeberg_issue",
                 ):
                     continue
-                context = _inline_context_block(path=c.path, line=c.line, position=c.position)
+                context = ""
+                if c.path:
+                    context = f"inline code comment on `{c.path}`\n\n"
                 mirrored_body = format_mirrored_comment(
                     c=MirrorComment(
                         src_platform="github_review",
                         src_author=c.author,
                         src_url=c.html_url,
                         src_id=c.id,
-                        body="\n".join([context, c.body]).strip(),
+                        body=f"{context}{c.body}".strip(),
                     )
                 )
                 created = await codeberg.create_issue_comment(

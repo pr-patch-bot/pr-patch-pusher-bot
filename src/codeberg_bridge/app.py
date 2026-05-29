@@ -208,7 +208,9 @@ async def webhook_codeberg(request: Request, background: BackgroundTasks) -> Res
         comment_url = comment.get("html_url") or ""
         comment_user = ((comment.get("user") or {}).get("login")) or ""
 
-        if action != "created":
+        # Some Codeberg/Gitea setups emit PR inline comment webhooks with action="created",
+        # others use "reviewed" for review-related comment deliveries. Treat both as mirrorable.
+        if action not in {"created", "reviewed"}:
             log.info(
                 "webhook_review_comment_ignored",
                 extra={"reason": "action", "action": action, "repo": repo},

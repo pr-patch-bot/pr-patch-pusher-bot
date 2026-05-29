@@ -446,3 +446,37 @@ class GitHubClient:
             line=int(data["line"]) if isinstance(data.get("line"), int) else None,
             position=int(data["position"]) if isinstance(data.get("position"), int) else None,
         )
+
+    async def create_review_comment(
+        self,
+        *,
+        repo: str,
+        pull_number: int,
+        commit_id: str,
+        path: str,
+        position: int,
+        body: str,
+    ) -> GitHubReviewComment:
+        payload = {
+            "body": body,
+            "commit_id": commit_id,
+            "path": path,
+            "position": int(position),
+        }
+        async with httpx.AsyncClient(timeout=60) as client:
+            r = await client.post(
+                f"https://api.github.com/repos/{repo}/pulls/{pull_number}/comments",
+                headers=self._headers(),
+                json=payload,
+            )
+            r.raise_for_status()
+            data = r.json()
+        return GitHubReviewComment(
+            id=int(data["id"]),
+            html_url=data["html_url"],
+            author=((data.get("user") or {}).get("login")) or "",
+            body=data.get("body") or "",
+            path=data.get("path") if isinstance(data.get("path"), str) else None,
+            line=int(data["line"]) if isinstance(data.get("line"), int) else None,
+            position=int(data["position"]) if isinstance(data.get("position"), int) else None,
+        )

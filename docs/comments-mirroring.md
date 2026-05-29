@@ -50,6 +50,18 @@ Implementation note (current approach):
   (e.g. `discussion_r123456789` / `#r123456789`), and use GitHub’s `in_reply_to` API to reply in-thread.
   Otherwise we mirror as a normal PR conversation comment.
 
+## Codeberg inline comments (review comments) -> GitHub
+
+Codeberg inline comments are delivered via a more specific webhook type:
+
+- `X-Gitea-Event-Type: pull_request_review_comment` citeturn0search0
+
+The bridge now accepts that event type and best-effort mirrors it to GitHub as:
+
+- a GitHub inline review comment when `path` + `position` + `commit_id` are provided, or
+- a GitHub reply-in-thread when an `in_reply_to` id is provided, or
+- a fallback normal PR conversation comment when anchoring data is missing.
+
 ## Authorship model
 
 Mirrored comments are authored by the bot account on the destination platform.

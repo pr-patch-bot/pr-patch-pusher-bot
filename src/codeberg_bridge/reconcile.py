@@ -11,6 +11,20 @@ from .utils import parse_duration_seconds
 
 log = logging.getLogger("codeberg_bridge.reconcile")
 
+def _closed_comment(*, github_pr_url: str) -> str:
+    return f"Mirrored GitHub PR was closed: {github_pr_url}"
+
+
+def _merged_comment(*, github_pr_url: str, github_merge_commit_url: str | None) -> str:
+    if github_merge_commit_url:
+        return "\n".join(
+            [
+                f"Mirrored GitHub PR was merged: {github_pr_url}",
+                f"Merge commit: {github_merge_commit_url}",
+            ]
+        )
+    return f"Mirrored GitHub PR was merged: {github_pr_url}"
+
 
 async def reconcile_once(
     *,
@@ -37,6 +51,32 @@ async def reconcile_once(
         state = (pr.state or "").strip().lower()
         if state == "open":
             continue
+
+        github_merge_commit_url: str | None = None
+        if pr.merge_commit_sha:
+            github_merge_commit_url = f"https://github.com/{mirror.github_repo}/commit/{pr.merge_commit_sha}"
+
+        try:
+            if pr.merged_at:
+                comment = _merged_comment(
+                    github_pr_url=pr.html_url, github_merge_commit_url=github_merge_commit_url
+                )
+            else:
+                comment = _closed_comment(github_pr_url=pr.html_url)
+            await codeberg.create_issue_comment(
+                repo=mirror.codeberg_repo, issue_number=m.codeberg_pr_number, body=comment
+            )
+        except Exception:
+            log.exception(
+                "codeberg_close_comment_failed",
+                extra={
+                    "mirror": mirror.name,
+                    "github_repo": mirror.github_repo,
+                    "github_pr": pr.number,
+                    "codeberg_repo": mirror.codeberg_repo,
+                    "codeberg_pr": m.codeberg_pr_number,
+                },
+            )
 
         # If GitHub PR is closed (merged or not), close Codeberg PR to keep things tidy.
         await codeberg.update_pull_request_state(

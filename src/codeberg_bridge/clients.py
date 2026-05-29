@@ -91,6 +91,15 @@ class CodebergClient:
             r = await client.patch(url, headers=self._headers(), json=payload)
             r.raise_for_status()
 
+    async def create_issue_comment(self, *, repo: str, issue_number: int, body: str) -> None:
+        # In Gitea, pull requests are issues; PR comments use the issues comments API.
+        owner, name = repo.split("/", 1)
+        url = f"{self._base_url}/api/v1/repos/{owner}/{name}/issues/{issue_number}/comments"
+        payload = {"body": body}
+        async with httpx.AsyncClient(timeout=30) as client:
+            r = await client.post(url, headers=self._headers(), json=payload)
+            r.raise_for_status()
+
 
 @dataclass(frozen=True)
 class GitHubPR:
@@ -105,6 +114,7 @@ class GitHubPRDetails:
     html_url: str
     state: str
     merged_at: str | None
+    merge_commit_sha: str | None
 
 
 class GitHubClient:
@@ -233,6 +243,7 @@ class GitHubClient:
             html_url=data["html_url"],
             state=data.get("state") or "unknown",
             merged_at=data.get("merged_at"),
+            merge_commit_sha=data.get("merge_commit_sha"),
         )
 
     async def repo_exists(self, *, repo: str) -> bool:

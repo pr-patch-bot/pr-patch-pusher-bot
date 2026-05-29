@@ -342,8 +342,10 @@ async def mirror_comments_once(
                     # GitHub "position" is diff-specific and often not compatible with
                     # Codeberg/Gitea's stored position. Prefer line anchoring when present.
                     gh_line = line if isinstance(line, int) and line > 0 else None
-                    gh_position = position if gh_line is None and isinstance(position, int) and position > 0 else None
-                    if path and m.last_synced_commit and (gh_position is not None or gh_line is not None):
+                    # Do not attempt to translate Codeberg/Gitea `position` to GitHub `position`.
+                    # It is diff-specific and frequently fails to resolve on GitHub.
+                    gh_position = None
+                    if path and m.last_synced_commit and gh_line is not None:
                         try:
                             created_gh = await github.create_review_comment(
                                 repo=mirror.github_repo,
@@ -395,9 +397,25 @@ async def mirror_comments_once(
                                     "github_repo": mirror.github_repo,
                                         "github_pr": github_pr_number,
                                         "rc_id": rc_id,
-                                        "path": path,
-                                    },
-                                )
+                                    "path": path,
+                                },
+                            )
+                    else:
+                        log.warning(
+                            "codeberg_review_root_missing_line_anchor",
+                            extra={
+                                "mirror": mirror.name,
+                                "codeberg_repo": mirror.codeberg_repo,
+                                "codeberg_pr": codeberg_pr_number,
+                                "github_repo": mirror.github_repo,
+                                "github_pr": github_pr_number,
+                                "rc_id": rc_id,
+                                "path": path,
+                                "codeberg_line": line,
+                                "codeberg_position": position,
+                                "commit_id": m.last_synced_commit,
+                            },
+                        )
                 else:
                     # Reply — look up the mapped GitHub root comment ID.
                     mapped = db.get_mirrored_comment_dst(
@@ -568,13 +586,11 @@ async def mirror_comments_once(
                     )
 
                     if thread_info.is_root:
-                        gh_line = thread_info.line if isinstance(thread_info.line, int) and thread_info.line > 0 else None
-                        gh_position = (
-                            thread_info.position
-                            if gh_line is None and isinstance(thread_info.position, int) and thread_info.position > 0
-                            else None
+                        gh_line = (
+                            thread_info.line if isinstance(thread_info.line, int) and thread_info.line > 0 else None
                         )
-                        if thread_info.path and m.last_synced_commit and (gh_position is not None or gh_line is not None):
+                        gh_position = None
+                        if thread_info.path and m.last_synced_commit and gh_line is not None:
                             try:
                                 created_gh = await github.create_review_comment(
                                     repo=mirror.github_repo,

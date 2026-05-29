@@ -202,23 +202,48 @@ async def webhook_codeberg(request: Request, background: BackgroundTasks) -> Res
         pr = payload.get("pull_request") or {}
         comment = payload.get("comment") or {}
 
-        pr_number = pr.get("number")
+        pr_number = pr.get("number") or pr.get("index")
         comment_id = comment.get("id")
         comment_body = comment.get("body") or ""
         comment_url = comment.get("html_url") or ""
         comment_user = ((comment.get("user") or {}).get("login")) or ""
 
         if action != "created":
+            log.info(
+                "webhook_review_comment_ignored",
+                extra={"reason": "action", "action": action, "repo": repo},
+            )
             return Response(status_code=202, content="ignored action")
-        if not isinstance(repo, str) or not isinstance(pr_number, int):
+        if not isinstance(repo, str) or not repo:
+            log.info("webhook_review_comment_ignored", extra={"reason": "repo"})
             return Response(status_code=400, content="missing repo/pr data")
-        if not isinstance(comment_id, int) or not isinstance(comment_user, str):
+        if not isinstance(pr_number, int):
+            log.info(
+                "webhook_review_comment_ignored",
+                extra={"reason": "pr_number", "pr_number": pr_number, "repo": repo},
+            )
+            return Response(status_code=400, content="missing repo/pr data")
+        if not isinstance(comment_id, int) or not isinstance(comment_user, str) or not comment_user:
+            log.info(
+                "webhook_review_comment_ignored",
+                extra={
+                    "reason": "comment_data",
+                    "repo": repo,
+                    "pr": pr_number,
+                    "comment_id": comment_id,
+                    "comment_user": comment_user,
+                },
+            )
             return Response(status_code=400, content="missing comment data")
         if "<!-- cbb:mirror" in comment_body:
             return Response(status_code=202, content="ignored mirrored comment")
 
         mirror = _get_mirror_for_repo(config, repo)
         if not mirror:
+            log.info(
+                "webhook_review_comment_ignored",
+                extra={"reason": "no_mirror", "repo": repo, "pr": pr_number},
+            )
             return Response(status_code=202, content="no mirror configured")
 
         mapping = db.get_mapping(
@@ -227,6 +252,10 @@ async def webhook_codeberg(request: Request, background: BackgroundTasks) -> Res
             github_repo=mirror.github_repo,
         )
         if not mapping or not mapping.github_pr_number:
+            log.info(
+                "webhook_review_comment_ignored",
+                extra={"reason": "no_mapping", "repo": repo, "pr": pr_number},
+            )
             return Response(status_code=202, content="no github mapping")
 
         if db.has_mirrored_comment_any_dst(
@@ -236,6 +265,10 @@ async def webhook_codeberg(request: Request, background: BackgroundTasks) -> Res
             src_platform="codeberg_review",
             src_comment_id=comment_id,
         ):
+            log.info(
+                "webhook_review_comment_ignored",
+                extra={"reason": "already_mirrored", "repo": repo, "pr": pr_number, "comment_id": comment_id},
+            )
             return Response(status_code=202, content="already mirrored")
 
         # Best-effort anchoring: if Codeberg provides path/position/commit_id, mirror as inline.
@@ -326,6 +359,10 @@ async def webhook_codeberg(request: Request, background: BackgroundTasks) -> Res
                 )
 
         background.add_task(_run_inline_mirror)
+        log.info(
+            "webhook_review_comment_accepted",
+            extra={"repo": repo, "pr": pr_number, "comment_id": comment_id},
+        )
         return Response(status_code=202, content="accepted")
 
     # event == "issue_comment"

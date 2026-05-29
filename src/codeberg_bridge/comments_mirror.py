@@ -339,11 +339,10 @@ async def mirror_comments_once(
                     path = root_rc.get("path")
                     line = root_rc.get("line") or root_rc.get("original_line")
                     position = root_rc.get("position")
-                    # GitHub review-comment create is picky about coordinates. Prefer
-                    # Codeberg's diff position when present; otherwise use line. Do not
-                    # send both, because some client/API combinations reject that.
-                    gh_line = None if position is not None else line
-                    gh_position = position if position is not None else None
+                    # GitHub "position" is diff-specific and often not compatible with
+                    # Codeberg/Gitea's stored position. Prefer line anchoring when present.
+                    gh_line = line if isinstance(line, int) and line > 0 else None
+                    gh_position = position if gh_line is None and isinstance(position, int) and position > 0 else None
                     if path and m.last_synced_commit and (gh_position is not None or gh_line is not None):
                         try:
                             created_gh = await github.create_review_comment(
@@ -569,8 +568,12 @@ async def mirror_comments_once(
                     )
 
                     if thread_info.is_root:
-                        gh_line = None if thread_info.position is not None else thread_info.line
-                        gh_position = thread_info.position if thread_info.position is not None else None
+                        gh_line = thread_info.line if isinstance(thread_info.line, int) and thread_info.line > 0 else None
+                        gh_position = (
+                            thread_info.position
+                            if gh_line is None and isinstance(thread_info.position, int) and thread_info.position > 0
+                            else None
+                        )
                         if thread_info.path and m.last_synced_commit and (gh_position is not None or gh_line is not None):
                             try:
                                 created_gh = await github.create_review_comment(

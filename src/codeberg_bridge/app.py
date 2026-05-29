@@ -748,7 +748,7 @@ async def webhook_codeberg(request: Request, background: BackgroundTasks) -> Res
                                             pull_number=github_pr_number,
                                             commit_id=str(review_commit),
                                             path=path,
-                                            position=int(pos) if isinstance(pos, int) and pos > 0 else None,
+                                            position=None,
                                             line=int(ln) if isinstance(ln, int) and ln > 0 else None,
                                             body=mirrored_body,
                                         )
@@ -1195,7 +1195,7 @@ async def webhook_codeberg(request: Request, background: BackgroundTasks) -> Res
                             pull_number=github_pr_number,
                             commit_id=review_commit,
                             path=thread_info.path,
-                            position=thread_info.position,
+                            position=None,
                             line=thread_info.line,
                             body=review_body,
                         )

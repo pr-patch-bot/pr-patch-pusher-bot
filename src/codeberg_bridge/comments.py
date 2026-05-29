@@ -27,7 +27,10 @@ def format_mirrored_comment(*, c: MirrorComment) -> str:
     if profile:
         author = f"[{c.src_author}]({profile})"
 
-    header = f"{author}:"
+    label = ""
+    if c.src_platform in {"github_review", "codeberg_review"}:
+        label = " (in-line code comment)"
+    header = f"{author}{label}:"
     src = f"[src]({c.src_url})" if c.src_url else ""
     marker = f"<!-- cbb:mirror src={c.src_platform} id={c.src_id} -->"
     body = (c.body or "").strip()

@@ -83,11 +83,29 @@ async def mirror_comments_once(
 
         # Phase 1: Codeberg issue comments -> GitHub issue comments
         page = 1
+        seen_codeberg_comment_ids: set[int] = set()
         while True:
             comments = await codeberg.list_issue_comments(
                 repo=mirror.codeberg_repo, issue_number=codeberg_pr_number, page=page
             )
             if not comments:
+                break
+            new_ids = 0
+            for c in comments:
+                if c.id in seen_codeberg_comment_ids:
+                    continue
+                seen_codeberg_comment_ids.add(c.id)
+                new_ids += 1
+            if new_ids == 0:
+                log.warning(
+                    "codeberg_comments_pagination_stalled",
+                    extra={
+                        "mirror": mirror.name,
+                        "codeberg_repo": mirror.codeberg_repo,
+                        "codeberg_pr": codeberg_pr_number,
+                        "page": page,
+                    },
+                )
                 break
             for c in comments:
                 if codeberg_bot and c.author == codeberg_bot:
@@ -164,11 +182,29 @@ async def mirror_comments_once(
 
         # Phase 1: GitHub issue comments -> Codeberg issue comments
         page = 1
+        seen_github_issue_comment_ids: set[int] = set()
         while True:
             comments = await github.list_issue_comments(
                 repo=mirror.github_repo, issue_number=github_pr_number, page=page
             )
             if not comments:
+                break
+            new_ids = 0
+            for c in comments:
+                if c.id in seen_github_issue_comment_ids:
+                    continue
+                seen_github_issue_comment_ids.add(c.id)
+                new_ids += 1
+            if new_ids == 0:
+                log.warning(
+                    "github_issue_comments_pagination_stalled",
+                    extra={
+                        "mirror": mirror.name,
+                        "github_repo": mirror.github_repo,
+                        "github_pr": github_pr_number,
+                        "page": page,
+                    },
+                )
                 break
             for c in comments:
                 if c.author == github_bot:
@@ -210,11 +246,29 @@ async def mirror_comments_once(
 
         # Phase 2: GitHub inline review comments -> Codeberg as normal issue comments (one-way)
         page = 1
+        seen_github_review_comment_ids: set[int] = set()
         while True:
             comments = await github.list_review_comments(
                 repo=mirror.github_repo, pull_number=github_pr_number, page=page
             )
             if not comments:
+                break
+            new_ids = 0
+            for c in comments:
+                if c.id in seen_github_review_comment_ids:
+                    continue
+                seen_github_review_comment_ids.add(c.id)
+                new_ids += 1
+            if new_ids == 0:
+                log.warning(
+                    "github_review_comments_pagination_stalled",
+                    extra={
+                        "mirror": mirror.name,
+                        "github_repo": mirror.github_repo,
+                        "github_pr": github_pr_number,
+                        "page": page,
+                    },
+                )
                 break
             for c in comments:
                 if c.author == github_bot:

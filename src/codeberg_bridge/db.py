@@ -323,10 +323,9 @@ class Database:
         github_repo: str,
         src_platform: str,
         src_comment_id: int,
+        dst_platform: str | None = None,
     ) -> tuple[str, int] | None:
-        with self.connect() as conn:
-            row = conn.execute(
-                """
+        query = """
                 SELECT dst_platform, dst_comment_id
                 FROM mirrored_comments
                 WHERE codeberg_repo=?
@@ -334,18 +333,28 @@ class Database:
                   AND github_repo=?
                   AND src_platform=?
                   AND src_comment_id=?
+                """
+        params: list[object] = [
+            codeberg_repo,
+            int(codeberg_pr_number),
+            github_repo,
+            src_platform,
+            int(src_comment_id),
+        ]
+        if dst_platform is not None:
+            query += " AND dst_platform=?"
+            params.append(dst_platform)
+        query += """
                 ORDER BY updated_at DESC
                 LIMIT 1
-                """,
-                (
-                    codeberg_repo,
-                    int(codeberg_pr_number),
-                    github_repo,
-                    src_platform,
-                    int(src_comment_id),
-                ),
-            ).fetchone()
+                """
+        with self.connect() as conn:
+            row = conn.execute(query, tuple(params)).fetchone()
         if not row:
+            return None
+        try:
+            return (str(row["dst_platform"]), int(row["dst_comment_id"]))
+        except Exception:
             return None
 
     def get_github_review_id_for_codeberg_review_id(

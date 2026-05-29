@@ -48,6 +48,128 @@ def _extract_github_review_comment_id(text: str) -> int | None:
         return None
 
 
+def _review_thread_key(rc: dict) -> tuple:
+    """Stable grouping key for Codeberg review comments that belong to the same diff thread."""
+    return (
+        str(rc.get("review") or rc.get("pull_request_review_id") or ""),
+        rc.get("path") or "",
+        rc.get("position") or 0,
+        rc.get("commit_id") or "",
+        rc.get("diff_hunk") or "",
+    )
+
+
+class _ReviewThreadInfo:
+    """All metadata needed to mirror a Codeberg review comment or reply to GitHub."""
+
+    __slots__ = (
+        "thread_root_id",
+        "is_root",
+        "review_id",
+        "path",
+        "position",
+        "line",
+        "commit_id",
+        "diff_hunk",
+    )
+
+    def __init__(
+        self,
+        *,
+        thread_root_id: int,
+        is_root: bool,
+        review_id: int,
+        path: str | None,
+        position: int | None,
+        line: int | None,
+        commit_id: str | None,
+        diff_hunk: str | None,
+    ) -> None:
+        self.thread_root_id = thread_root_id
+        self.is_root = is_root
+        self.review_id = review_id
+        self.path = path
+        self.position = position
+        self.line = line
+        self.commit_id = commit_id
+        self.diff_hunk = diff_hunk
+
+
+async def _find_codeberg_review_thread_root(
+    *,
+    codeberg: "CodebergClient",
+    repo: str,
+    pull_number: int,
+    comment_id: int,
+) -> _ReviewThreadInfo | None:
+    """
+    Determine whether *comment_id* is a Codeberg review-thread comment (root or reply).
+
+    Returns a _ReviewThreadInfo if it is a review comment, or None if it is a normal
+    PR timeline comment.
+
+    Strategy (per context.md):
+      1. Fetch all reviews for the PR.
+      2. For each review fetch its comments.
+      3. If comment_id is found, group by (review + path + position + commit_id + diff_hunk).
+      4. Sort that group by created_at; the earliest is the thread root.
+    """
+    try:
+        reviews = []
+        page = 1
+        while True:
+            batch = await codeberg.list_pull_reviews(repo=repo, pull_number=pull_number, page=page, limit=50)
+            if not batch:
+                break
+            reviews.extend(batch)
+            if len(batch) < 50:
+                break
+            page += 1
+    except Exception:
+        log.exception(
+            "codeberg_list_reviews_failed",
+            extra={"repo": repo, "pull_number": pull_number},
+        )
+        return None
+
+    for review in reviews:
+        review_id = review.get("id")
+        if not isinstance(review_id, int):
+            continue
+        try:
+            rcomments = await codeberg.list_pull_review_comments(
+                repo=repo, pull_number=pull_number, review_id=review_id
+            )
+        except Exception:
+            continue
+        if not rcomments:
+            continue
+
+        # Is our comment_id in this review?
+        target_rc = next((rc for rc in rcomments if rc.get("id") == comment_id), None)
+        if target_rc is None:
+            continue
+
+        # Group siblings by diff-thread key.
+        key = _review_thread_key(target_rc)
+        siblings = [rc for rc in rcomments if _review_thread_key(rc) == key]
+        siblings.sort(key=lambda rc: rc.get("created_at") or "")
+        thread_root = siblings[0]
+        thread_root_id = int(thread_root["id"])
+        return _ReviewThreadInfo(
+            thread_root_id=thread_root_id,
+            is_root=(thread_root_id == comment_id),
+            review_id=review_id,
+            path=thread_root.get("path") or None,
+            position=thread_root.get("position") or None,
+            line=thread_root.get("line") or thread_root.get("original_line") or None,
+            commit_id=thread_root.get("commit_id") or None,
+            diff_hunk=thread_root.get("diff_hunk") or None,
+        )
+
+    return None
+
+
 def _post_delay_seconds() -> float:
     raw = (os.environ.get("COMMENT_MIRROR_DELAY_SECONDS") or "").strip()
     if not raw:
@@ -105,6 +227,248 @@ async def mirror_comments_once(
             "gh_review_to_cb_inline": 0,
         }
 
+        # Phase 0: Codeberg review comments -> GitHub review thread comments (root + replies)
+        # Poll all reviews and their comments directly. This is the authoritative source
+        # for review-thread activity on Codeberg (context.md: "fetch PR reviews, fetch each
+        # review's comments, if comment.id found in review comments: ..."). Issue comments
+        # (Phase 1) may or may not surface these depending on Codeberg version; we handle
+        # them here first so Phase 1 can safely skip any IDs already processed.
+        seen_codeberg_review_comment_ids_phase0: set[int] = set()
+        cursor_codeberg_review = db.get_comment_cursor(
+            codeberg_repo=mirror.codeberg_repo,
+            codeberg_pr_number=codeberg_pr_number,
+            github_repo=mirror.github_repo,
+            platform="codeberg_review",
+        )
+        max_seen_codeberg_review = cursor_codeberg_review
+        cb_reviews = []
+        try:
+            review_page = 1
+            while True:
+                review_batch = await codeberg.list_pull_reviews(
+                    repo=mirror.codeberg_repo, pull_number=codeberg_pr_number, page=review_page, limit=50
+                )
+                if not review_batch:
+                    break
+                cb_reviews.extend(review_batch)
+                if len(review_batch) < 50:
+                    break
+                review_page += 1
+        except Exception:
+            cb_reviews = []
+            log.exception(
+                "codeberg_list_reviews_failed_phase0",
+                extra={"mirror": mirror.name, "codeberg_repo": mirror.codeberg_repo, "codeberg_pr": codeberg_pr_number},
+            )
+
+        # Collect all review comments across all reviews, grouped by thread key.
+        # Structure: thread_key -> sorted list of (created_at, review_id, rc_dict)
+        cb_thread_map: dict[tuple, list[tuple[str, int, dict]]] = {}
+        for cb_review in (cb_reviews or []):
+            rid = cb_review.get("id")
+            if not isinstance(rid, int):
+                continue
+            try:
+                rcomments = await codeberg.list_pull_review_comments(
+                    repo=mirror.codeberg_repo, pull_number=codeberg_pr_number, review_id=rid
+                )
+            except Exception:
+                continue
+            for rc in (rcomments or []):
+                rc_id = rc.get("id")
+                if not isinstance(rc_id, int):
+                    continue
+                seen_codeberg_review_comment_ids_phase0.add(rc_id)
+                if rc_id > max_seen_codeberg_review:
+                    max_seen_codeberg_review = rc_id
+                key = _review_thread_key(rc)
+                cb_thread_map.setdefault(key, []).append((rc.get("created_at") or "", rid, rc))
+
+        # Sort each thread group by created_at so index 0 is always the root.
+        for key in cb_thread_map:
+            cb_thread_map[key].sort(key=lambda t: t[0])
+
+        # Build a map from rc_id -> thread_root_id for quick lookup.
+        cb_rc_to_root: dict[int, int] = {}
+        for entries in cb_thread_map.values():
+            root_id = int(entries[0][2]["id"])
+            for _, _, rc in entries:
+                cb_rc_to_root[int(rc["id"])] = root_id
+
+        # Now mirror each new review comment to GitHub.
+        for entries in cb_thread_map.values():
+            root_rc = entries[0][2]
+            root_id = int(root_rc["id"])
+            root_review_id = entries[0][1]
+
+            for _created_at, _review_id, rc in entries:
+                rc_id = int(rc["id"])
+                # Do not skip by cursor here. Review-thread creates can fail transiently;
+                # the DB mapping is the source of truth for whether this item was mirrored.
+                rc_author = (rc.get("user") or {}).get("login") or ""
+                if codeberg_bot and rc_author == codeberg_bot:
+                    continue
+                if allowed_codeberg_users and rc_author not in allowed_codeberg_users:
+                    continue
+                if _has_marker(rc.get("body") or ""):
+                    continue
+                if db.has_mirrored_comment_any_dst(
+                    codeberg_repo=mirror.codeberg_repo,
+                    codeberg_pr_number=codeberg_pr_number,
+                    github_repo=mirror.github_repo,
+                    src_platform="codeberg_review",
+                    src_comment_id=rc_id,
+                ):
+                    continue
+
+                rc_body = format_mirrored_comment(
+                    c=MirrorComment(
+                        src_platform="codeberg_review",
+                        src_author=rc_author,
+                        src_url=rc.get("html_url") or "",
+                        src_id=rc_id,
+                        body=rc.get("body") or "",
+                    )
+                )
+
+                is_root = (rc_id == root_id)
+                if is_root:
+                    # Mirror as a new GitHub inline review comment.
+                    path = root_rc.get("path")
+                    line = root_rc.get("line") or root_rc.get("original_line")
+                    position = root_rc.get("position")
+                    # GitHub review-comment create is picky about coordinates. Prefer
+                    # Codeberg's diff position when present; otherwise use line. Do not
+                    # send both, because some client/API combinations reject that.
+                    gh_line = None if position is not None else line
+                    gh_position = position if position is not None else None
+                    if path and m.last_synced_commit and (gh_position is not None or gh_line is not None):
+                        try:
+                            created_gh = await github.create_pull_review_comment(
+                                repo=mirror.github_repo,
+                                pull_number=github_pr_number,
+                                commit_id=m.last_synced_commit,
+                                path=path,
+                                line=gh_line,
+                                position=gh_position,
+                                body=rc_body,
+                            )
+                            db.upsert_mirrored_comment(
+                                codeberg_repo=mirror.codeberg_repo,
+                                codeberg_pr_number=codeberg_pr_number,
+                                github_repo=mirror.github_repo,
+                                github_pr_number=github_pr_number,
+                                src_platform="codeberg_review",
+                                src_comment_id=rc_id,
+                                dst_platform="github_review",
+                                dst_comment_id=created_gh.id,
+                            )
+                            mirrored_counts["cb_to_gh_review_reply"] += 1
+                            if delay_s:
+                                await asyncio.sleep(delay_s)
+                        except Exception:
+                            log.exception(
+                                "comments_mirror_cb_review_root_to_gh_failed",
+                                extra={
+                                    "mirror": mirror.name,
+                                    "codeberg_repo": mirror.codeberg_repo,
+                                    "codeberg_pr": codeberg_pr_number,
+                                    "github_repo": mirror.github_repo,
+                                    "github_pr": github_pr_number,
+                                    "rc_id": rc_id,
+                                    "path": path,
+                                },
+                            )
+                else:
+                    # Reply — look up the mapped GitHub root comment ID.
+                    mapped = db.get_mirrored_comment_dst(
+                        codeberg_repo=mirror.codeberg_repo,
+                        codeberg_pr_number=codeberg_pr_number,
+                        github_repo=mirror.github_repo,
+                        src_platform="codeberg_review",
+                        src_comment_id=root_id,
+                        dst_platform="github_review",
+                    )
+                    github_root_id = mapped[1] if mapped and mapped[0] == "github_review" else None
+
+                    # If the root was originally a GitHub review comment that we mirrored
+                    # to Codeberg, the mapping is stored in the opposite direction:
+                    #   github_review:<github id> -> codeberg_review:<codeberg root id>
+                    # In that case, map the Codeberg root back to the GitHub root and
+                    # post the new Codeberg reply into that existing GitHub thread.
+                    if github_root_id is None:
+                        github_root_id = db.get_github_review_id_for_codeberg_review_id(
+                            codeberg_repo=mirror.codeberg_repo,
+                            codeberg_pr_number=codeberg_pr_number,
+                            github_repo=mirror.github_repo,
+                            codeberg_review_comment_id=root_id,
+                        )
+
+                    if github_root_id:
+                        try:
+                            try:
+                                created_gh = await github.create_review_comment_reply_via_replies_endpoint(
+                                    repo=mirror.github_repo,
+                                    pull_number=github_pr_number,
+                                    comment_id=github_root_id,
+                                    body=rc_body,
+                                )
+                            except Exception:
+                                created_gh = await github.create_review_comment_reply(
+                                    repo=mirror.github_repo,
+                                    pull_number=github_pr_number,
+                                    in_reply_to=github_root_id,
+                                    body=rc_body,
+                                )
+                            db.upsert_mirrored_comment(
+                                codeberg_repo=mirror.codeberg_repo,
+                                codeberg_pr_number=codeberg_pr_number,
+                                github_repo=mirror.github_repo,
+                                github_pr_number=github_pr_number,
+                                src_platform="codeberg_review",
+                                src_comment_id=rc_id,
+                                dst_platform="github_review",
+                                dst_comment_id=created_gh.id,
+                            )
+                            mirrored_counts["cb_to_gh_review_reply"] += 1
+                            if delay_s:
+                                await asyncio.sleep(delay_s)
+                        except Exception:
+                            log.exception(
+                                "comments_mirror_cb_review_reply_to_gh_failed",
+                                extra={
+                                    "mirror": mirror.name,
+                                    "codeberg_repo": mirror.codeberg_repo,
+                                    "codeberg_pr": codeberg_pr_number,
+                                    "github_repo": mirror.github_repo,
+                                    "github_pr": github_pr_number,
+                                    "rc_id": rc_id,
+                                    "root_id": root_id,
+                                    "github_root_id": github_root_id,
+                                },
+                            )
+                    else:
+                        log.warning(
+                            "codeberg_review_reply_no_mapped_github_root",
+                            extra={
+                                "mirror": mirror.name,
+                                "codeberg_repo": mirror.codeberg_repo,
+                                "codeberg_pr": codeberg_pr_number,
+                                "root_id": root_id,
+                                "rc_id": rc_id,
+                            },
+                        )
+
+        if max_seen_codeberg_review > cursor_codeberg_review:
+            db.set_comment_cursor(
+                codeberg_repo=mirror.codeberg_repo,
+                codeberg_pr_number=codeberg_pr_number,
+                github_repo=mirror.github_repo,
+                github_pr_number=github_pr_number,
+                platform="codeberg_review",
+                last_seen_id=max_seen_codeberg_review,
+            )
+
         # Phase 1: Codeberg issue comments -> GitHub issue comments
         page = 1
         seen_codeberg_comment_ids: set[int] = set()
@@ -149,9 +513,174 @@ async def mirror_comments_once(
                     continue
                 if c.id <= cursor_codeberg_issue:
                     continue
-                # This Codeberg comment may be mirrored either as a GitHub issue comment
-                # or as a GitHub review-thread reply (phase 3). Avoid duplicates by
-                # checking any existing destination mapping.
+                # Skip any comment already handled by Phase 0 (review comments).
+                if c.id in seen_codeberg_review_comment_ids_phase0:
+                    continue
+
+                # Codeberg can expose review-thread replies through the generic
+                # issue-comments feed. Before treating this as a normal PR timeline
+                # comment, re-classify it by fetching reviews and their review comments.
+                # If it is found there, it must be mirrored as a GitHub review comment
+                # or a GitHub review-thread reply, never as a GitHub issue comment.
+                thread_info = await _find_codeberg_review_thread_root(
+                    codeberg=codeberg,
+                    repo=mirror.codeberg_repo,
+                    pull_number=codeberg_pr_number,
+                    comment_id=c.id,
+                )
+                if thread_info is not None:
+                    if db.has_mirrored_comment_any_dst(
+                        codeberg_repo=mirror.codeberg_repo,
+                        codeberg_pr_number=codeberg_pr_number,
+                        github_repo=mirror.github_repo,
+                        src_platform="codeberg_review",
+                        src_comment_id=c.id,
+                    ):
+                        continue
+
+                    review_body = format_mirrored_comment(
+                        c=MirrorComment(
+                            src_platform="codeberg_review",
+                            src_author=c.author,
+                            src_url=c.html_url,
+                            src_id=c.id,
+                            body=c.body,
+                        )
+                    )
+
+                    if thread_info.is_root:
+                        gh_line = None if thread_info.position is not None else thread_info.line
+                        gh_position = thread_info.position if thread_info.position is not None else None
+                        if thread_info.path and m.last_synced_commit and (gh_position is not None or gh_line is not None):
+                            try:
+                                created_gh = await github.create_pull_review_comment(
+                                    repo=mirror.github_repo,
+                                    pull_number=github_pr_number,
+                                    commit_id=m.last_synced_commit,
+                                    path=thread_info.path,
+                                    line=gh_line,
+                                    position=gh_position,
+                                    body=review_body,
+                                )
+                                db.upsert_mirrored_comment(
+                                    codeberg_repo=mirror.codeberg_repo,
+                                    codeberg_pr_number=codeberg_pr_number,
+                                    github_repo=mirror.github_repo,
+                                    github_pr_number=github_pr_number,
+                                    src_platform="codeberg_review",
+                                    src_comment_id=c.id,
+                                    dst_platform="github_review",
+                                    dst_comment_id=created_gh.id,
+                                )
+                                mirrored_counts["cb_to_gh_review_reply"] += 1
+                                if delay_s:
+                                    await asyncio.sleep(delay_s)
+                            except Exception:
+                                log.exception(
+                                    "comments_mirror_cb_issue_reclassified_review_root_to_gh_failed",
+                                    extra={
+                                        "mirror": mirror.name,
+                                        "codeberg_repo": mirror.codeberg_repo,
+                                        "codeberg_pr": codeberg_pr_number,
+                                        "github_repo": mirror.github_repo,
+                                        "github_pr": github_pr_number,
+                                        "comment_id": c.id,
+                                        "path": thread_info.path,
+                                    },
+                                )
+                        else:
+                            log.warning(
+                                "codeberg_issue_reclassified_review_root_missing_inline_metadata",
+                                extra={
+                                    "mirror": mirror.name,
+                                    "codeberg_repo": mirror.codeberg_repo,
+                                    "codeberg_pr": codeberg_pr_number,
+                                    "comment_id": c.id,
+                                    "path": thread_info.path,
+                                    "last_synced_commit": m.last_synced_commit,
+                                },
+                            )
+                        continue
+
+                    # Reply — resolve the GitHub root comment ID. This covers both:
+                    #   codeberg_review:<root> -> github_review:<root>
+                    # and the reverse mapping when the root originated on GitHub:
+                    #   github_review:<root> -> codeberg_review:<root>.
+                    mapped = db.get_mirrored_comment_dst(
+                        codeberg_repo=mirror.codeberg_repo,
+                        codeberg_pr_number=codeberg_pr_number,
+                        github_repo=mirror.github_repo,
+                        src_platform="codeberg_review",
+                        src_comment_id=thread_info.thread_root_id,
+                        dst_platform="github_review",
+                    )
+                    github_root_id = mapped[1] if mapped and mapped[0] == "github_review" else None
+                    if github_root_id is None:
+                        github_root_id = db.get_github_review_id_for_codeberg_review_id(
+                            codeberg_repo=mirror.codeberg_repo,
+                            codeberg_pr_number=codeberg_pr_number,
+                            github_repo=mirror.github_repo,
+                            codeberg_review_comment_id=thread_info.thread_root_id,
+                        )
+
+                    if github_root_id:
+                        try:
+                            try:
+                                created_gh = await github.create_review_comment_reply_via_replies_endpoint(
+                                    repo=mirror.github_repo,
+                                    pull_number=github_pr_number,
+                                    comment_id=github_root_id,
+                                    body=review_body,
+                                )
+                            except Exception:
+                                created_gh = await github.create_review_comment_reply(
+                                    repo=mirror.github_repo,
+                                    pull_number=github_pr_number,
+                                    in_reply_to=github_root_id,
+                                    body=review_body,
+                                )
+                            db.upsert_mirrored_comment(
+                                codeberg_repo=mirror.codeberg_repo,
+                                codeberg_pr_number=codeberg_pr_number,
+                                github_repo=mirror.github_repo,
+                                github_pr_number=github_pr_number,
+                                src_platform="codeberg_review",
+                                src_comment_id=c.id,
+                                dst_platform="github_review",
+                                dst_comment_id=created_gh.id,
+                            )
+                            mirrored_counts["cb_to_gh_review_reply"] += 1
+                            if delay_s:
+                                await asyncio.sleep(delay_s)
+                        except Exception:
+                            log.exception(
+                                "comments_mirror_cb_issue_reclassified_review_reply_to_gh_failed",
+                                extra={
+                                    "mirror": mirror.name,
+                                    "codeberg_repo": mirror.codeberg_repo,
+                                    "codeberg_pr": codeberg_pr_number,
+                                    "github_repo": mirror.github_repo,
+                                    "github_pr": github_pr_number,
+                                    "comment_id": c.id,
+                                    "root_id": thread_info.thread_root_id,
+                                    "github_root_id": github_root_id,
+                                },
+                            )
+                    else:
+                        log.warning(
+                            "codeberg_issue_reclassified_review_reply_no_mapped_github_root",
+                            extra={
+                                "mirror": mirror.name,
+                                "codeberg_repo": mirror.codeberg_repo,
+                                "codeberg_pr": codeberg_pr_number,
+                                "root_id": thread_info.thread_root_id,
+                                "comment_id": c.id,
+                            },
+                        )
+                    continue
+
+                # This is a real Codeberg PR timeline comment. Avoid duplicates by
+                # checking any existing destination mapping before posting to GitHub.
                 if db.has_mirrored_comment_any_dst(
                     codeberg_repo=mirror.codeberg_repo,
                     codeberg_pr_number=codeberg_pr_number,
@@ -169,52 +698,8 @@ async def mirror_comments_once(
                         body=c.body,
                     )
                 )
-                # Phase 3 best-effort: if a Codeberg comment references a GitHub inline review
-                # comment (by URL like discussion_r123), reply into that thread.
-                in_reply_to = _extract_github_review_comment_id(c.body)
-                if in_reply_to:
-                    try:
-                        try:
-                            created_review = await github.create_review_comment_reply_via_replies_endpoint(
-                                repo=mirror.github_repo,
-                                pull_number=github_pr_number,
-                                comment_id=in_reply_to,
-                                body=body,
-                            )
-                        except Exception:
-                            created_review = await github.create_review_comment_reply(
-                                repo=mirror.github_repo,
-                                pull_number=github_pr_number,
-                                in_reply_to=in_reply_to,
-                                body=body,
-                            )
-                        db.upsert_mirrored_comment(
-                            codeberg_repo=mirror.codeberg_repo,
-                            codeberg_pr_number=codeberg_pr_number,
-                            github_repo=mirror.github_repo,
-                            github_pr_number=github_pr_number,
-                            src_platform="codeberg_issue",
-                            src_comment_id=c.id,
-                            dst_platform="github_review",
-                            dst_comment_id=created_review.id,
-                        )
-                        mirrored_counts["cb_to_gh_review_reply"] += 1
-                        if delay_s:
-                            await asyncio.sleep(delay_s)
-                        continue
-                    except Exception:
-                        log.exception(
-                            "comments_mirror_reply_to_review_failed",
-                            extra={
-                                "mirror": mirror.name,
-                                "github_repo": mirror.github_repo,
-                                "github_pr": github_pr_number,
-                                "codeberg_repo": mirror.codeberg_repo,
-                                "codeberg_pr": codeberg_pr_number,
-                                "in_reply_to": in_reply_to,
-                            },
-                        )
 
+                # --- Plain issue comment (normal PR timeline) ---
                 created_issue = await github.create_issue_comment(
                     repo=mirror.github_repo, issue_number=github_pr_number, body=body
                 )
@@ -373,67 +858,164 @@ async def mirror_comments_once(
                     continue
                 if _has_marker(c.body):
                     continue
-                if c.id <= cursor_github_review:
-                    continue
-                if db.has_mirrored_comment(
+                # Do not skip by cursor here. Review-thread creates can fail transiently;
+                # the DB mapping is the source of truth for whether this item was mirrored.
+                if db.has_mirrored_comment_any_dst(
                     codeberg_repo=mirror.codeberg_repo,
                     codeberg_pr_number=codeberg_pr_number,
                     github_repo=mirror.github_repo,
                     src_platform="github_review",
                     src_comment_id=c.id,
-                    dst_platform="codeberg_issue",
                 ):
                     continue
-                context = ""
-                if c.path:
-                    context = f"inline code comment on `{c.path}`\n\n"
                 mirrored_body = format_mirrored_comment(
                     c=MirrorComment(
                         src_platform="github_review",
                         src_author=c.author,
                         src_url=c.html_url,
                         src_id=c.id,
-                        body=f"{context}{c.body}".strip(),
+                        body=c.body,
                     )
                 )
-                created_id: int
-                dst_platform: str
-                # If this is a reply in an existing GitHub inline thread, mirror as a normal
-                # PR comment. Codeberg/Gitea's public API doesn't expose a stable "reply under
-                # inline comment id" capability, and creating a second inline comment can
-                # duplicate hunks.
+                created_id: int = 0
+                dst_platform: str = "codeberg_review"
+                created_review_path: str | None = None
+
+                # GitHub review replies must stay review-thread replies. Do not fall
+                # back to a normal Codeberg issue comment, because that destroys the
+                # thread mapping and makes later replies impossible to attach.
                 if c.in_reply_to_id:
-                    created_issue = await codeberg.create_issue_comment(
-                        repo=mirror.codeberg_repo,
-                        issue_number=codeberg_pr_number,
-                        body=mirrored_body,
+                    mapped_cb_root = db.get_mirrored_comment_dst(
+                        codeberg_repo=mirror.codeberg_repo,
+                        codeberg_pr_number=codeberg_pr_number,
+                        github_repo=mirror.github_repo,
+                        src_platform="github_review",
+                        src_comment_id=int(c.in_reply_to_id),
+                        dst_platform="codeberg_review",
                     )
-                    created_id = created_issue.id
-                    dst_platform = "codeberg_issue"
-                    mirrored_counts["gh_review_to_cb_issue"] += 1
-                elif c.path and c.line and m.last_synced_commit:
-                    created_review = await codeberg.create_pull_review_comment(
+                    if not mapped_cb_root or mapped_cb_root[0] != "codeberg_review":
+                        log.warning(
+                            "github_review_reply_no_mapped_codeberg_root",
+                            extra={
+                                "mirror": mirror.name,
+                                "github_repo": mirror.github_repo,
+                                "github_pr": github_pr_number,
+                                "codeberg_repo": mirror.codeberg_repo,
+                                "codeberg_pr": codeberg_pr_number,
+                                "github_comment_id": c.id,
+                                "in_reply_to_id": c.in_reply_to_id,
+                            },
+                        )
+                        continue
+
+                    codeberg_root_id = int(mapped_cb_root[1])
+                    codeberg_root_info = await _find_codeberg_review_thread_root(
+                        codeberg=codeberg,
                         repo=mirror.codeberg_repo,
                         pull_number=codeberg_pr_number,
-                        commit_id=m.last_synced_commit,
-                        path=c.path,
-                        line=int(c.line),
-                        body=mirrored_body,
+                        comment_id=codeberg_root_id,
                     )
-                    created_id = int(created_review.id) if created_review.id else 0
-                    dst_platform = "codeberg_review"
-                    mirrored_counts["gh_review_to_cb_inline"] += 1
+                    reply_path = (codeberg_root_info.path if codeberg_root_info else None) or c.path
+                    reply_line = (codeberg_root_info.line if codeberg_root_info else None) or c.line
+                    reply_commit = (codeberg_root_info.commit_id if codeberg_root_info else None) or m.last_synced_commit
+                    if not reply_path or reply_line is None or not reply_commit:
+                        log.warning(
+                            "github_review_reply_missing_codeberg_inline_metadata",
+                            extra={
+                                "mirror": mirror.name,
+                                "github_repo": mirror.github_repo,
+                                "github_pr": github_pr_number,
+                                "codeberg_repo": mirror.codeberg_repo,
+                                "codeberg_pr": codeberg_pr_number,
+                                "github_comment_id": c.id,
+                                "in_reply_to_id": c.in_reply_to_id,
+                                "codeberg_root_id": codeberg_root_id,
+                                "path": reply_path,
+                                "line": reply_line,
+                                "commit_id": reply_commit,
+                            },
+                        )
+                        continue
+
+                    try:
+                        created_review = await codeberg.create_pull_review_comment(
+                            repo=mirror.codeberg_repo,
+                            pull_number=codeberg_pr_number,
+                            commit_id=reply_commit,
+                            path=reply_path,
+                            line=int(reply_line),
+                            body=mirrored_body,
+                        )
+                        created_id = int(created_review.id) if created_review.id else 0
+                        created_review_path = reply_path
+                        mirrored_counts["gh_review_to_cb_inline"] += 1
+                    except Exception:
+                        log.exception(
+                            "comments_mirror_gh_review_reply_to_cb_inline_failed",
+                            extra={
+                                "mirror": mirror.name,
+                                "github_repo": mirror.github_repo,
+                                "github_pr": github_pr_number,
+                                "codeberg_repo": mirror.codeberg_repo,
+                                "codeberg_pr": codeberg_pr_number,
+                                "github_comment_id": c.id,
+                                "in_reply_to_id": c.in_reply_to_id,
+                                "codeberg_root_id": codeberg_root_id,
+                                "path": reply_path,
+                                "line": reply_line,
+                            },
+                        )
+                        continue
+
+                elif c.path and c.line and m.last_synced_commit:
+                    try:
+                        created_review = await codeberg.create_pull_review_comment(
+                            repo=mirror.codeberg_repo,
+                            pull_number=codeberg_pr_number,
+                            commit_id=m.last_synced_commit,
+                            path=c.path,
+                            line=int(c.line),
+                            body=mirrored_body,
+                        )
+                        created_id = int(created_review.id) if created_review.id else 0
+                        created_review_path = c.path
+                        mirrored_counts["gh_review_to_cb_inline"] += 1
+                    except Exception:
+                        log.exception(
+                            "comments_mirror_gh_review_root_to_cb_inline_failed",
+                            extra={
+                                "mirror": mirror.name,
+                                "github_repo": mirror.github_repo,
+                                "github_pr": github_pr_number,
+                                "codeberg_repo": mirror.codeberg_repo,
+                                "codeberg_pr": codeberg_pr_number,
+                                "github_comment_id": c.id,
+                                "path": c.path,
+                                "line": c.line,
+                            },
+                        )
+                        continue
                 else:
-                    created_issue = await codeberg.create_issue_comment(
-                        repo=mirror.codeberg_repo, issue_number=codeberg_pr_number, body=mirrored_body
+                    log.warning(
+                        "github_review_comment_missing_inline_metadata",
+                        extra={
+                            "mirror": mirror.name,
+                            "github_repo": mirror.github_repo,
+                            "github_pr": github_pr_number,
+                            "codeberg_repo": mirror.codeberg_repo,
+                            "codeberg_pr": codeberg_pr_number,
+                            "github_comment_id": c.id,
+                            "in_reply_to_id": c.in_reply_to_id,
+                            "path": c.path,
+                            "line": c.line,
+                            "last_synced_commit": m.last_synced_commit,
+                        },
                     )
-                    created_id = created_issue.id
-                    dst_platform = "codeberg_issue"
-                    mirrored_counts["gh_review_to_cb_issue"] += 1
+                    continue
 
                 # If the create-review call didn't return a concrete comment id, resolve it by
                 # fetching the newest review comments and matching by path/body.
-                if dst_platform == "codeberg_review" and created_id == 0 and c.path:
+                if dst_platform == "codeberg_review" and created_id == 0 and created_review_path:
                     try:
                         reviews = await codeberg.list_pull_reviews(
                             repo=mirror.codeberg_repo, pull_number=codeberg_pr_number, page=1, limit=5
@@ -446,7 +1028,7 @@ async def mirror_comments_once(
                                 repo=mirror.codeberg_repo, pull_number=codeberg_pr_number, review_id=rid
                             )
                             for rc in rcomments or []:
-                                if rc.get("path") != c.path:
+                                if rc.get("path") != created_review_path:
                                     continue
                                 if (rc.get("body") or "").strip() != mirrored_body.strip():
                                     continue

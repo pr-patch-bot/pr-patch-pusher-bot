@@ -5,7 +5,9 @@ Goal: mirror pull-request discussion comments between Codeberg (Gitea) and GitHu
 - GitHub: `GITHUB_TOKEN` (existing)
 - Codeberg: `CODEBERG_TOKEN` (existing)
 
-## Scope (recommended MVP)
+## Phased scope (we're doing 1+2 first, then 3)
+
+### Phase 1 (MVP): PR conversation comments (bi-directional)
 
 Mirror **PR conversation comments only** (top-level PR comments), not inline review comments.
 
@@ -13,6 +15,33 @@ Mirror **PR conversation comments only** (top-level PR comments), not inline rev
 - Codeberg: issue comments on the PR (`/issues/{pr_number}/comments`)
 
 Rationale: inline review comments don’t map 1:1 across platforms (diff positions/paths/lines), and can easily create confusing threads.
+
+### Phase 2: GitHub inline review comments → Codeberg as normal comments (one-way)
+
+Mirror GitHub inline review comments to Codeberg, but **as normal PR conversation comments** (not anchored).
+
+Body should include:
+
+- original author
+- direct link to the original GitHub inline comment
+- (optional) file path + line/position metadata as plain text if available
+- hidden mirror marker
+
+This is intentionally lossy but reliable, and keeps Codeberg users in the loop.
+
+Reply behavior in Phase 2:
+
+- If a Codeberg user replies to the mirrored inline comment, mirror that reply back to GitHub as a **normal PR conversation comment** that links to the original GitHub inline comment.
+- Do not attempt to post it into the original inline thread yet (that’s Phase 3).
+
+### Phase 3: Threaded inline review comment mirroring (best-effort)
+
+Attempt to preserve inline threads across platforms:
+
+- If a Codeberg comment is a reply to a mirrored GitHub inline comment, the GitHub bot replies into the correct GitHub review thread when possible.
+- If the diff anchor is missing/outdated, fall back to a normal PR conversation comment with a link.
+
+This requires more stored metadata (see “Storage”) and careful handling of outdated diffs.
 
 ## Authorship model
 
@@ -40,8 +69,7 @@ When ingesting comments from either platform:
 
 - Ignore any comment authored by the destination bot account.
 - Ignore any comment containing `<!-- cbb:mirror ... -->`.
-- Maintain a mapping table of mirrored comment IDs:
-  - `src_platform`, `src_comment_id`, `dst_platform`, `dst_comment_id`, `codeberg_repo`, `codeberg_pr_number`, `github_repo`, `github_pr_number`
+- Maintain a mapping table of mirrored comment IDs (see “Storage”).
 
 This allows:
 
@@ -68,10 +96,32 @@ Two options:
   - `mirror_codeberg_comment_to_github(...)`
   - `mirror_github_comment_to_codeberg(...)`
 - Add storage:
-  - new SQLite table `mirrored_comments`
+  - new SQLite table `mirrored_comments` (Phase 1+)
+  - optional extra columns for Phase 3 anchoring (see below)
 - Add webhook endpoints:
   - `/webhook/github` (optional; requires signature verification)
   - extend existing `/webhook/codeberg` to handle issue_comment events
+
+## Storage (suggested)
+
+Minimum for Phase 1+2:
+
+- `codeberg_repo`, `codeberg_pr_number`
+- `github_repo`, `github_pr_number`
+- `src_platform`, `src_comment_id`
+- `dst_platform`, `dst_comment_id`
+- `src_comment_url` (optional but convenient)
+- `created_at`, `updated_at`
+
+Additional for Phase 3 (GitHub inline anchoring):
+
+- `github_review_comment_id` (if different from `src_comment_id`)
+- `github_pull_request_review_id` / `github_review_thread_id` (if used)
+- `github_path`
+- `github_commit_id`
+- `github_position` and/or `github_line` + `github_side`
+
+Rule: always be able to fall back to a normal PR conversation comment when anchor metadata is missing or invalid.
 
 ## Gotchas
 
@@ -79,4 +129,3 @@ Two options:
 - Mentions: don’t rewrite `@user` across platforms in MVP.
 - Rate limiting: batch polling + webhook retry backoff.
 - Edits/deletes: decide policy early (mirror edits? annotate deletes?).
-

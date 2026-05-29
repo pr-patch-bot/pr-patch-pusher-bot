@@ -20,6 +20,21 @@ CREATE TABLE IF NOT EXISTS mirrored_prs (
   updated_at INTEGER NOT NULL,
   UNIQUE(codeberg_repo, codeberg_pr_number, github_repo)
 );
+
+CREATE TABLE IF NOT EXISTS mirrored_comments (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  codeberg_repo TEXT NOT NULL,
+  codeberg_pr_number INTEGER NOT NULL,
+  github_repo TEXT NOT NULL,
+  github_pr_number INTEGER NOT NULL,
+  src_platform TEXT NOT NULL,
+  src_comment_id INTEGER NOT NULL,
+  dst_platform TEXT NOT NULL,
+  dst_comment_id INTEGER NOT NULL,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL,
+  UNIQUE(codeberg_repo, codeberg_pr_number, github_repo, src_platform, src_comment_id, dst_platform)
+);
 """
 
 
@@ -33,6 +48,18 @@ class MirroredPR:
     github_branch: str
     last_synced_commit: str | None
     status: str
+
+
+@dataclass(frozen=True)
+class MirroredComment:
+    codeberg_repo: str
+    codeberg_pr_number: int
+    github_repo: str
+    github_pr_number: int
+    src_platform: str
+    src_comment_id: int
+    dst_platform: str
+    dst_comment_id: int
 
 
 class Database:
@@ -167,3 +194,80 @@ class Database:
                 )
             )
         return out
+
+    def has_mirrored_comment(
+        self,
+        *,
+        codeberg_repo: str,
+        codeberg_pr_number: int,
+        github_repo: str,
+        src_platform: str,
+        src_comment_id: int,
+        dst_platform: str,
+    ) -> bool:
+        with self.connect() as conn:
+            row = conn.execute(
+                """
+                SELECT 1
+                FROM mirrored_comments
+                WHERE codeberg_repo=?
+                  AND codeberg_pr_number=?
+                  AND github_repo=?
+                  AND src_platform=?
+                  AND src_comment_id=?
+                  AND dst_platform=?
+                LIMIT 1
+                """,
+                (
+                    codeberg_repo,
+                    int(codeberg_pr_number),
+                    github_repo,
+                    src_platform,
+                    int(src_comment_id),
+                    dst_platform,
+                ),
+            ).fetchone()
+        return bool(row)
+
+    def upsert_mirrored_comment(
+        self,
+        *,
+        codeberg_repo: str,
+        codeberg_pr_number: int,
+        github_repo: str,
+        github_pr_number: int,
+        src_platform: str,
+        src_comment_id: int,
+        dst_platform: str,
+        dst_comment_id: int,
+    ) -> None:
+        now = int(time.time())
+        with self.connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO mirrored_comments (
+                  codeberg_repo, codeberg_pr_number,
+                  github_repo, github_pr_number,
+                  src_platform, src_comment_id,
+                  dst_platform, dst_comment_id,
+                  created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(codeberg_repo, codeberg_pr_number, github_repo, src_platform, src_comment_id, dst_platform)
+                DO UPDATE SET
+                  github_pr_number=excluded.github_pr_number,
+                  dst_comment_id=excluded.dst_comment_id,
+                  updated_at=excluded.updated_at
+                """,
+                (
+                    codeberg_repo,
+                    int(codeberg_pr_number),
+                    github_repo,
+                    int(github_pr_number),
+                    src_platform,
+                    int(src_comment_id),
+                    dst_platform,
+                    int(dst_comment_id),
+                    now,
+                    now,
+                ),
+            )

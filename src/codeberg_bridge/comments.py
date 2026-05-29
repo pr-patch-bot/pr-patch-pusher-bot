@@ -5,7 +5,8 @@ from dataclasses import dataclass
 
 @dataclass(frozen=True)
 class MirrorComment:
-    src_platform: str  # "github" | "codeberg"
+    # Example values: "github_issue", "github_review", "codeberg_issue"
+    src_platform: str
     src_author: str
     src_url: str
     src_id: int
@@ -20,4 +21,3 @@ def format_mirrored_comment(*, c: MirrorComment) -> str:
     if not body:
         return "\n".join([header, "", marker])
     return "\n".join([header, "", body, "", marker])
-

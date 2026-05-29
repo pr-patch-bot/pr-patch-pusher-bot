@@ -31,3 +31,4 @@ mirrors:
     # sync_upstream_to_codeberg_interval: 8h
     # reconcile_github_to_codeberg_interval: 8h
     # backfill_codeberg_open_prs_interval: 8h
+    # mirror_comments_interval: 2m

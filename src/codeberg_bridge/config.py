@@ -51,6 +51,7 @@ class MirrorConfig(BaseModel):
     sync_upstream_to_codeberg_interval: str | None = None
     reconcile_github_to_codeberg_interval: str | None = None
     backfill_codeberg_open_prs_interval: str | None = None
+    mirror_comments_interval: str | None = None
 
 
 class AppConfig(BaseModel):

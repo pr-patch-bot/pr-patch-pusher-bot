@@ -14,6 +14,7 @@ from .config import AppConfig, LoadedSecrets, load_config, load_secrets
 from .db import Database
 from .logging import setup_logging
 from .backfill import run_backfill_worker
+from .comments_mirror import run_comments_mirror_worker
 from .reconcile import run_reconcile_worker
 from .mirror import _mirror_branch_name, mirror_pr
 from .sync_upstream import run_sync_worker
@@ -74,6 +75,12 @@ async def lifespan(app: FastAPI):
         if mirror.backfill_codeberg_open_prs_interval:
             tasks.append(
                 asyncio.create_task(run_backfill_worker(config=config, secrets=secrets, mirror=mirror))
+            )
+        if mirror.mirror_comments_interval:
+            tasks.append(
+                asyncio.create_task(
+                    run_comments_mirror_worker(config=config, secrets=secrets, db=db, mirror=mirror)
+                )
             )
     try:
         yield

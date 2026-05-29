@@ -84,7 +84,7 @@ async def _mirror_pr_inner(
 
     # Optional (disabled by default): delay mirroring when a marker is present
     # in the Codeberg PR title/body. Enable by setting:
-    #   DEBUG_DELAY_MARKER='<marker>'
+    #   DEBUG_DELAY_MARKER='!customerPaySubscription'
     #   DEBUG_DELAY_DURATION='1m'
     marker = os.environ.get("DEBUG_DELAY_MARKER", "").strip()
     duration = os.environ.get("DEBUG_DELAY_DURATION", "").strip()

@@ -63,7 +63,16 @@ async def mirror_comments_once(
     codeberg = CodebergClient(base_url=config.codeberg.base_url, token=secrets.codeberg_token)
 
     github_bot = await github.get_authenticated_user_login()
-    codeberg_bot = await codeberg.get_authenticated_user_login()
+    # Some Codeberg tokens can be restricted in ways that make /api/v1/user return 403.
+    # We can still safely mirror by relying on the hidden marker for loop prevention.
+    codeberg_bot: str | None = None
+    try:
+        codeberg_bot = await codeberg.get_authenticated_user_login()
+    except Exception:
+        log.warning(
+            "codeberg_bot_login_unavailable",
+            extra={"mirror": mirror.name, "codeberg_repo": mirror.codeberg_repo},
+        )
 
     mappings = db.list_open_mappings(codeberg_repo=mirror.codeberg_repo, github_repo=mirror.github_repo)
     for m in mappings:
@@ -81,7 +90,7 @@ async def mirror_comments_once(
             if not comments:
                 break
             for c in comments:
-                if c.author == codeberg_bot:
+                if codeberg_bot and c.author == codeberg_bot:
                     continue
                 if _has_marker(c.body):
                     continue

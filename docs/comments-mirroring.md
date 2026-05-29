@@ -1,0 +1,82 @@
+# Comments mirroring (GitHub ↔ Codeberg) — design notes
+
+Goal: mirror pull-request discussion comments between Codeberg (Gitea) and GitHub using two bot accounts:
+
+- GitHub: `GITHUB_TOKEN` (existing)
+- Codeberg: `CODEBERG_TOKEN` (existing)
+
+## Scope (recommended MVP)
+
+Mirror **PR conversation comments only** (top-level PR comments), not inline review comments.
+
+- GitHub: issue comments on the PR (`/issues/{pr_number}/comments`)
+- Codeberg: issue comments on the PR (`/issues/{pr_number}/comments`)
+
+Rationale: inline review comments don’t map 1:1 across platforms (diff positions/paths/lines), and can easily create confusing threads.
+
+## Authorship model
+
+Mirrored comments are authored by the bot account on the destination platform.
+
+Each mirrored comment must:
+
+- Identify the original author username and platform.
+- Include a direct link to the original comment.
+- Include a hidden marker to prevent mirror-loops and enable idempotency.
+
+Suggested body format:
+
+```
+Comment by @<user> on <platform>: <original_comment_url>
+
+<original_body>
+
+<!-- cbb:mirror src=<github|codeberg> id=<comment_id> -->
+```
+
+## Loop prevention / idempotency
+
+When ingesting comments from either platform:
+
+- Ignore any comment authored by the destination bot account.
+- Ignore any comment containing `<!-- cbb:mirror ... -->`.
+- Maintain a mapping table of mirrored comment IDs:
+  - `src_platform`, `src_comment_id`, `dst_platform`, `dst_comment_id`, `codeberg_repo`, `codeberg_pr_number`, `github_repo`, `github_pr_number`
+
+This allows:
+
+- Avoiding duplicate mirrors.
+- Supporting edits (optional): update the mirrored comment instead of creating a new one.
+
+## Events / triggering
+
+Two options:
+
+1) Webhooks (preferred)
+   - GitHub: `issue_comment` (created/edited/deleted) for PR issues.
+   - Codeberg: Gitea issue_comment webhook for PR issues.
+
+2) Polling backfill (fallback)
+   - Periodically list comments since last cursor per PR mapping.
+
+## Implementation sketch (repo-local)
+
+- Add `clients.py`:
+  - `GitHubClient.list_issue_comments(...)`, `GitHubClient.create_issue_comment(...)`
+  - `CodebergClient.list_issue_comments(...)`, `CodebergClient.create_issue_comment(...)` (already has create)
+- Add `comments.py`:
+  - `mirror_codeberg_comment_to_github(...)`
+  - `mirror_github_comment_to_codeberg(...)`
+- Add storage:
+  - new SQLite table `mirrored_comments`
+- Add webhook endpoints:
+  - `/webhook/github` (optional; requires signature verification)
+  - extend existing `/webhook/codeberg` to handle issue_comment events
+
+## Gotchas
+
+- Markdown differences: keep transformations minimal; prefer “quote + link back”.
+- Mentions: don’t rewrite `@user` across platforms in MVP.
+- Rate limiting: batch polling + webhook retry backoff.
+- Edits/deletes: decide policy early (mirror edits? annotate deletes?).
+

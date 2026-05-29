@@ -201,6 +201,7 @@ async def webhook_codeberg(request: Request, background: BackgroundTasks) -> Res
         repo = (payload.get("repository") or {}).get("full_name")
         pr = payload.get("pull_request") or {}
         comment = payload.get("comment") or {}
+        review = payload.get("review") or {}
 
         pr_number = pr.get("number") or pr.get("index")
         comment_id = comment.get("id")
@@ -236,6 +237,25 @@ async def webhook_codeberg(request: Request, background: BackgroundTasks) -> Res
                     "comment_user": comment_user,
                 },
             )
+            # Diagnostics: some Codeberg/Gitea variants send review submissions with
+            # event_type=pull_request_review_comment but without an explicit `comment` object.
+            try:
+                log.info(
+                    "webhook_review_comment_payload_shape",
+                    extra={
+                        "repo": repo,
+                        "pr": pr_number,
+                        "action": action,
+                        "has_comment": bool(comment),
+                        "comment_keys": sorted(list(comment.keys())) if isinstance(comment, dict) else [],
+                        "has_review": bool(review),
+                        "review_keys": sorted(list(review.keys())) if isinstance(review, dict) else [],
+                        "pr_keys": sorted(list(pr.keys())) if isinstance(pr, dict) else [],
+                        "top_keys": sorted(list(payload.keys())),
+                    },
+                )
+            except Exception:
+                pass
             return Response(status_code=400, content="missing comment data")
         if "<!-- cbb:mirror" in comment_body:
             return Response(status_code=202, content="ignored mirrored comment")

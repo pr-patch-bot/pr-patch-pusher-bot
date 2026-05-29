@@ -8,10 +8,22 @@ from pathlib import Path
 
 class GitCommandError(RuntimeError):
     def __init__(self, *, args: list[str], cwd: Path, output: str):
-        super().__init__(f"git failed (cwd={cwd}): git {' '.join(args)}\n{output}".rstrip())
+        safe_args = [_redact_secrets(a) for a in args]
+        super().__init__(
+            f"git failed (cwd={cwd}): git {' '.join(safe_args)}\n{_redact_secrets(output)}".rstrip()
+        )
         self.args_list = args
         self.cwd = cwd
         self.output = output
+
+
+def _redact_secrets(text: str) -> str:
+    if not text:
+        return text
+    # Common token-in-URL forms used by this project.
+    text = text.replace("https://x-access-token:", "https://x-access-token:[REDACTED]@")
+    text = text.replace("https://oauth2:", "https://oauth2:[REDACTED]@")
+    return text
 
 
 def _run_git(args: list[str], *, cwd: Path) -> None:
@@ -105,10 +117,16 @@ def ensure_repo(
             cwd=repo_path,
         )
     else:
-        _run_git_with_retries(
-            ["remote", "set-url", "fork", _github_https_url(fork_repo, github_token)],
-            cwd=repo_path,
-        )
+        try:
+            _run_git_with_retries(
+                ["remote", "set-url", "fork", _github_https_url(fork_repo, github_token)],
+                cwd=repo_path,
+            )
+        except GitCommandError:
+            _run_git_with_retries(
+                ["remote", "add", "fork", _github_https_url(fork_repo, github_token)],
+                cwd=repo_path,
+            )
     return RepoPaths(path=repo_path)
 
 

@@ -33,6 +33,7 @@ With the default `docker-compose.yml`, the service is exposed on host port `8888
 
 - The bot mirrors only PRs authored by `allowed_codeberg_users`.
 - The bot creates deterministic, sanitized GitHub branch names under `branch_prefix`.
+- The mirrored GitHub PR targets the same base branch as the Codeberg PR (e.g. `master`, `release/*`).
 - Secrets are read from environment variables (see `config.yml`).
 - Optional: you can also force-sync the upstream GitHub base branch back into the Codeberg repo on a timer (see below).
 
@@ -45,7 +46,7 @@ mirrors:
   - name: monero
     github_repo: plowsof/monero
     codeberg_repo: montero-project/monero
-    base_branch: master
+    base_branch: master           # GitHub branch to sync from
     codeberg_base_branch: master  # optional; defaults to base_branch
     sync_upstream_to_codeberg_interval: 8h
 ```

@@ -23,6 +23,7 @@ mirrors:
     codeberg_repo: montero-project/monero
     allowed_codeberg_users:
       - plowsof
+    # GitHub branch name for "mainline" tasks like sync_upstream_to_codeberg (and as a fallback).
     base_branch: master
     branch_prefix: codeberg-pr
     # Optional:
@@ -30,4 +31,3 @@ mirrors:
     # sync_upstream_to_codeberg_interval: 8h
     # reconcile_github_to_codeberg_interval: 8h
     # backfill_codeberg_open_prs_interval: 8h
-

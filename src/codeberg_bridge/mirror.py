@@ -40,6 +40,19 @@ def _mirror_branch_name(mirror: MirrorConfig, *, codeberg_repo: str, pr_number: 
     )
 
 
+def _resolve_github_base_branch(mirror: MirrorConfig, *, codeberg_pr_base_branch: str) -> str:
+    # Mirror to the same target branch as the Codeberg PR (e.g. master, release/*, etc).
+    #
+    # If the upstream GitHub repo uses a different name for the "main" branch, configure
+    # a 1:1 mapping via:
+    #   mirror.base_branch (GitHub) <-> mirror.codeberg_base_branch (Codeberg)
+    if not codeberg_pr_base_branch:
+        return mirror.base_branch
+    if mirror.codeberg_base_branch and codeberg_pr_base_branch == mirror.codeberg_base_branch:
+        return mirror.base_branch
+    return codeberg_pr_base_branch
+
+
 def _pr_title(original_title: str) -> str:
     return original_title
 
@@ -138,11 +151,16 @@ async def _mirror_pr_inner(
     title = _pr_title(pr.title)
     author_url = f"{config.codeberg.base_url.rstrip('/')}/{pr.author}"
     body = _pr_body(pr_url=pr.html_url, author=pr.author, author_url=author_url, original_body=pr.body)
+    github_base_branch = _resolve_github_base_branch(mirror, codeberg_pr_base_branch=pr.base_ref)
 
     # If the PR already exists, update title/body even if git sync later fails.
     if existing:
         await github.update_pr_body(
-            upstream_repo=mirror.github_repo, number=existing.number, title=title, body=body
+            upstream_repo=mirror.github_repo,
+            number=existing.number,
+            title=title,
+            body=body,
+            base=github_base_branch,
         )
 
     repo_paths = ensure_repo(
@@ -153,7 +171,7 @@ async def _mirror_pr_inner(
     )
     sync_branch(
         repo_path=repo_paths.path,
-        upstream_base_branch=mirror.base_branch,
+        upstream_base_branch=github_base_branch,
         mirror_branch=branch,
         codeberg_clone_url=pr.head_repo_clone_url,
         codeberg_ref=pr.head_ref,
@@ -180,7 +198,7 @@ async def _mirror_pr_inner(
         title=title,
         body=body,
         head=head,
-        base=mirror.base_branch,
+        base=github_base_branch,
     )
     if db:
         db.upsert_mapping(

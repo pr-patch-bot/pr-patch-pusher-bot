@@ -193,9 +193,11 @@ class GitHubClient:
         return GitHubPR(number=int(data["number"]), html_url=data["html_url"])
 
     async def update_pr_body(
-        self, *, upstream_repo: str, number: int, title: str, body: str
+        self, *, upstream_repo: str, number: int, title: str, body: str, base: str | None = None
     ) -> None:
-        payload = {"title": title, "body": body}
+        payload: dict[str, str] = {"title": title, "body": body}
+        if base:
+            payload["base"] = base
         async with httpx.AsyncClient(timeout=60) as client:
             r = await client.patch(
                 f"https://api.github.com/repos/{upstream_repo}/pulls/{number}",

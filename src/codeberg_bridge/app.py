@@ -133,6 +133,7 @@ async def webhook_codeberg(request: Request, background: BackgroundTasks) -> Res
         or request.headers.get("X-Codeberg-Event-Type")
         or ""
     )
+    log.info("webhook_incoming", extra={"event": event, "event_type": event_type})
     # Gitea can report a normalized `X-Gitea-Event` plus a more specific `X-Gitea-Event-Type`,
     # but some setups may use the specific name directly as `X-Gitea-Event`.
     if event not in {"pull_request", "issue_comment", "pull_request_review_comment"} and event_type != "pull_request_review_comment":

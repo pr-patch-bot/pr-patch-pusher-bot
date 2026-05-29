@@ -12,7 +12,13 @@ from .utils import parse_duration_seconds
 log = logging.getLogger("codeberg_bridge.reconcile")
 
 def _closed_comment(*, github_pr_url: str) -> str:
-    return f"Mirrored GitHub PR was closed: {github_pr_url}"
+    return "\n".join(
+        [
+            f"Mirrored GitHub PR was closed: {github_pr_url}",
+            "",
+            "<!-- cbb:mirror src=github_system id=close_notice -->",
+        ]
+    )
 
 
 def _merged_comment(*, github_pr_url: str, github_merge_commit_url: str | None) -> str:
@@ -21,9 +27,17 @@ def _merged_comment(*, github_pr_url: str, github_merge_commit_url: str | None) 
             [
                 f"Mirrored GitHub PR was merged: {github_pr_url}",
                 f"Merge commit: {github_merge_commit_url}",
+                "",
+                "<!-- cbb:mirror src=github_system id=merge_notice -->",
             ]
         )
-    return f"Mirrored GitHub PR was merged: {github_pr_url}"
+    return "\n".join(
+        [
+            f"Mirrored GitHub PR was merged: {github_pr_url}",
+            "",
+            "<!-- cbb:mirror src=github_system id=merge_notice -->",
+        ]
+    )
 
 
 async def reconcile_once(

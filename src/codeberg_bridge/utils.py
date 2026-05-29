@@ -23,7 +23,7 @@ def hmac_sha256_hex(secret: str, body: bytes) -> str:
     return hmac.new(secret.encode("utf-8"), body, hashlib.sha256).hexdigest()
 
 
-_DURATION_RE = re.compile(r"^\s*(\d+)\s*([smhd]?)\s*$", re.IGNORECASE)
+_DURATION_RE = re.compile(r"^\s*(\d+)\s*([smhd]?)\s*$")
 
 
 def parse_duration_seconds(value: str) -> int:

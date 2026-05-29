@@ -57,6 +57,13 @@ def _get_mirror_for_repo(config: AppConfig, codeberg_repo: str):
     return None
 
 
+def _looks_like_mirrored_comment(body: str) -> bool:
+    # Loop prevention: Codeberg can deliver webhooks for comments we created ourselves.
+    # Some webhook variants may omit bodies; callers should combine this with author
+    # allowlisting where appropriate.
+    return "<!-- cbb:mirror" in (body or "")
+
+
 def _ensure_parent_dir(path: str) -> None:
     Path(path).expanduser().resolve().parent.mkdir(parents=True, exist_ok=True)
 
@@ -412,6 +419,14 @@ async def lifespan(app: FastAPI):
                 log.warning("github_upstream_repo_not_found", extra={"repo": mirror.github_repo})
     except Exception:
         log.exception("startup_sanity_checks_failed")
+    try:
+        cb = CodebergClient(base_url=config.codeberg.base_url, token=secrets.codeberg_token)
+        cb_login = await cb.get_authenticated_user_login()
+        app.state.codeberg_bot_login = cb_login
+        log.info("codeberg_auth_ok", extra={"login": cb_login})
+    except Exception:
+        app.state.codeberg_bot_login = None
+        log.warning("codeberg_auth_unavailable")
 
     for mirror in config.mirrors:
         if mirror.sync_upstream_to_codeberg_interval:
@@ -470,6 +485,7 @@ async def webhook_codeberg(request: Request, background: BackgroundTasks) -> Res
         or request.headers.get("X-Codeberg-Event-Type")
         or ""
     )
+    codeberg_bot_login = getattr(request.app.state, "codeberg_bot_login", None)
     log.info("webhook_incoming", extra={"event": event, "event_type": event_type})
     # Gitea can report a normalized `X-Gitea-Event` plus a more specific `X-Gitea-Event-Type`,
     # but some setups may use the specific name directly as `X-Gitea-Event`.
@@ -931,7 +947,7 @@ async def webhook_codeberg(request: Request, background: BackgroundTasks) -> Res
             except Exception:
                 pass
             return Response(status_code=202, content="accepted")
-        if "<!-- cbb:mirror" in comment_body:
+        if (codeberg_bot_login and comment_user == codeberg_bot_login) or _looks_like_mirrored_comment(comment_body):
             return Response(status_code=202, content="ignored mirrored comment")
 
         mirror = _get_mirror_for_repo(config, repo)
@@ -1142,7 +1158,7 @@ async def webhook_codeberg(request: Request, background: BackgroundTasks) -> Res
         return Response(status_code=400, content="missing repo/issue data")
     if not isinstance(comment_id, int) or not isinstance(comment_user, str):
         return Response(status_code=400, content="missing comment data")
-    if "<!-- cbb:mirror" in comment_body:
+    if (codeberg_bot_login and comment_user == codeberg_bot_login) or _looks_like_mirrored_comment(comment_body):
         return Response(status_code=202, content="ignored mirrored comment")
 
     mirror = _get_mirror_for_repo(config, repo)

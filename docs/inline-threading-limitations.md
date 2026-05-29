@@ -36,6 +36,8 @@ Result: when mirroring a reply *from GitHub into Codeberg inline threads*, the b
 - **GitHub → Codeberg**
   - Inline review comments become Codeberg line-attached comments when possible.
   - Inline replies on GitHub are mirrored as *normal Codeberg PR comments* to avoid duplicated hunks, with a `[src]` link back to the original inline thread.
+  - Optional: if `CODEBERG_WEB_COOKIE` is set, the bridge will attempt to post true inline *reply* comments
+    via the Codeberg UI route `/{repo}/pulls/{index}/files/reviews/comments` (cookie + CSRF scraping).
 
 - **Codeberg → GitHub**
   - If Codeberg includes `in_reply_to` in the webhook payload for an inline comment, the bridge can map it and reply in the correct GitHub inline thread (GitHub supports this explicitly).
@@ -46,4 +48,3 @@ Result: when mirroring a reply *from GitHub into Codeberg inline threads*, the b
 Web UIs can use internal endpoints and server-side context that are not exposed (or not stable) in the public REST API. For automation, the bridge relies on documented REST endpoints and stable payload fields.
 
 If Gitea adds a supported “reply to inline comment” field/endpoint in its public API in the future, the bridge can be updated to preserve inline threading for GitHub → Codeberg replies.
-

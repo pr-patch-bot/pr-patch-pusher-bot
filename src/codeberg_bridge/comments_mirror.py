@@ -7,6 +7,7 @@ import os
 
 from .clients import CodebergClient, GitHubClient
 from .comments import MirrorComment, format_mirrored_comment
+from .codeberg_web import CodebergWebClient
 from .config import AppConfig, LoadedSecrets, MirrorConfig
 from .db import Database
 from .utils import parse_duration_seconds
@@ -76,6 +77,12 @@ async def mirror_comments_once(
 
     github = GitHubClient(token=secrets.github_token)
     codeberg = CodebergClient(base_url=config.codeberg.base_url, token=secrets.codeberg_token)
+    codeberg_web_cookie = (os.environ.get("CODEBERG_WEB_COOKIE") or "").strip()
+    codeberg_web = (
+        CodebergWebClient(base_url=config.codeberg.base_url, cookie=codeberg_web_cookie)
+        if codeberg_web_cookie
+        else None
+    )
 
     github_bot = await github.get_authenticated_user_login()
     # Some Codeberg tokens can be restricted in ways that make /api/v1/user return 403.
@@ -398,17 +405,58 @@ async def mirror_comments_once(
                 )
                 created_id: int
                 dst_platform: str
-                # If this is a reply in an existing GitHub inline thread, do NOT create
-                # another inline comment on Codeberg; Gitea doesn't support true inline
-                # replies via API, and it results in duplicated diff hunks. Mirror as a
-                # normal PR comment instead.
+                # If this is a reply in an existing GitHub inline thread, optionally try
+                # to create a true reply on Codeberg via the UI route (cookie-based).
+                # If not configured, mirror as a normal PR comment to avoid duplicated hunks.
                 if c.in_reply_to_id:
-                    created_issue = await codeberg.create_issue_comment(
-                        repo=mirror.codeberg_repo, issue_number=codeberg_pr_number, body=mirrored_body
-                    )
-                    created_id = created_issue.id
+                    created_id = 0
                     dst_platform = "codeberg_issue"
-                    mirrored_counts["gh_review_to_cb_issue"] += 1
+                    if codeberg_web and c.path and c.line:
+                        mapped = db.get_mirrored_comment_dst(
+                            codeberg_repo=mirror.codeberg_repo,
+                            codeberg_pr_number=codeberg_pr_number,
+                            github_repo=mirror.github_repo,
+                            src_platform="github_review",
+                            src_comment_id=int(c.in_reply_to_id),
+                        )
+                        codeberg_parent_id = None
+                        if mapped and mapped[0] == "codeberg_review":
+                            codeberg_parent_id = mapped[1]
+                        if codeberg_parent_id:
+                            try:
+                                await codeberg_web.create_inline_reply_comment(
+                                    repo=mirror.codeberg_repo,
+                                    pull_number=codeberg_pr_number,
+                                    path=c.path,
+                                    line=int(c.line),
+                                    side="proposed",
+                                    content=mirrored_body,
+                                    reply_to=int(codeberg_parent_id),
+                                )
+                                # We don't have a stable way to read back the created id via the UI route.
+                                created_id = int(c.id)
+                                dst_platform = "codeberg_review_reply"
+                                mirrored_counts["gh_review_to_cb_inline"] += 1
+                            except Exception:
+                                log.exception(
+                                    "codeberg_web_reply_failed",
+                                    extra={
+                                        "mirror": mirror.name,
+                                        "codeberg_repo": mirror.codeberg_repo,
+                                        "codeberg_pr": codeberg_pr_number,
+                                        "github_repo": mirror.github_repo,
+                                        "github_pr": github_pr_number,
+                                        "github_review_comment": c.id,
+                                    },
+                                )
+                    if dst_platform == "codeberg_issue":
+                        created_issue = await codeberg.create_issue_comment(
+                            repo=mirror.codeberg_repo,
+                            issue_number=codeberg_pr_number,
+                            body=mirrored_body,
+                        )
+                        created_id = created_issue.id
+                        mirrored_counts["gh_review_to_cb_issue"] += 1
                 elif c.path and c.line and m.last_synced_commit:
                     created_review = await codeberg.create_pull_review_comment(
                         repo=mirror.codeberg_repo,

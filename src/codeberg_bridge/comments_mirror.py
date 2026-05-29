@@ -5,6 +5,8 @@ import logging
 import re
 import os
 
+import httpx
+
 from .clients import CodebergClient, GitHubClient
 from .comments import MirrorComment, format_mirrored_comment
 from .config import AppConfig, LoadedSecrets, MirrorConfig
@@ -366,8 +368,8 @@ async def mirror_comments_once(
                             mirrored_counts["cb_to_gh_review_reply"] += 1
                             if delay_s:
                                 await asyncio.sleep(delay_s)
-                        except Exception:
-                            log.exception(
+                        except httpx.HTTPStatusError as e:
+                            log.error(
                                 "comments_mirror_cb_review_root_to_gh_failed",
                                 extra={
                                     "mirror": mirror.name,
@@ -377,8 +379,26 @@ async def mirror_comments_once(
                                     "github_pr": github_pr_number,
                                     "rc_id": rc_id,
                                     "path": path,
+                                    "commit_id": m.last_synced_commit,
+                                    "line": gh_line,
+                                    "position": gh_position,
+                                    "status": getattr(e.response, "status_code", None),
+                                    "body": (getattr(e.response, "text", "") or "")[:500],
                                 },
                             )
+                        except Exception:
+                            log.exception(
+                                "comments_mirror_cb_review_root_to_gh_failed",
+                                extra={
+                                    "mirror": mirror.name,
+                                    "codeberg_repo": mirror.codeberg_repo,
+                                    "codeberg_pr": codeberg_pr_number,
+                                    "github_repo": mirror.github_repo,
+                                        "github_pr": github_pr_number,
+                                        "rc_id": rc_id,
+                                        "path": path,
+                                    },
+                                )
                 else:
                     # Reply — look up the mapped GitHub root comment ID.
                     mapped = db.get_mirrored_comment_dst(

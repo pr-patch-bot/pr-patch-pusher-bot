@@ -564,9 +564,9 @@ class GitHubClient:
     ) -> GitHubReviewComment:
         payload: dict[str, object] = {"body": body, "commit_id": commit_id, "path": path}
         # Prefer the modern line/side anchor when present; fall back to position.
-        if isinstance(line, int) and line > 0 and isinstance(side, str) and side:
+        if isinstance(line, int) and line > 0:
             payload["line"] = int(line)
-            payload["side"] = side
+            payload["side"] = side if isinstance(side, str) and side else "RIGHT"
         elif position is not None:
             payload["position"] = int(position)
         async with httpx.AsyncClient(timeout=60) as client:

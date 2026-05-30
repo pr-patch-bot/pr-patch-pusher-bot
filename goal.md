@@ -1,6 +1,6 @@
 # Build a Codeberg/Gitea → GitHub PR Mirroring Bot
 
-Create a self-hosted bot that mirrors pull requests from Codeberg/Gitea repositories to GitHub repositories.
+Create a self-hosted bot that mirrors pull requests **and PR comments** between Codeberg/Gitea and GitHub.
 
 ---
 
@@ -8,13 +8,7 @@ Create a self-hosted bot that mirrors pull requests from Codeberg/Gitea reposito
 
 The bot watches configured Codeberg/Gitea repositories. When a configured Codeberg/Gitea user opens or updates a pull request, the bot creates or updates a matching branch on its GitHub fork, then opens or updates a GitHub pull request against the configured upstream GitHub repository.
 
-This is **one-way only**:
-
-```text
-Codeberg/Gitea PR → GitHub PR
-```
-
-The bot must never create pull requests back to Codeberg/Gitea.
+Pull requests are mirrored **one-way** (Codeberg/Gitea → GitHub), but comments are mirrored **two-way** (with allowlisting rules; see below).
 
 ---
 
@@ -51,9 +45,20 @@ mirrors:
       - alice
       - bob
 
+    # Default upstream base branch on GitHub (fallback only).
     base_branch: master
 
     branch_prefix: codeberg-pr
+
+    # Optional:
+    # If set, prefer using the Codeberg PR base ref (and this value as fallback).
+    codeberg_base_branch: master
+
+    # Optional: background workers
+    sync_upstream_to_codeberg_interval: 10s
+    reconcile_github_to_codeberg_interval: 2m
+    backfill_codeberg_open_prs_interval: 2m
+    mirror_comments_interval: 30s
 ```
 
 Each mirror entry means:
@@ -81,6 +86,26 @@ For each configured repository pair:
    - create or update a GitHub pull request
    - include a link to the original Codeberg/Gitea PR
    - continuously sync updates
+
+## Comment Mirroring (PR timeline + inline review comments)
+
+When enabled via `mirror_comments_interval`, the bot mirrors:
+
+- **GitHub → Codeberg**
+  - PR timeline comments (issue comments) are mirrored to Codeberg PR comments.
+  - Inline review comments are mirrored to Codeberg inline review comments.
+  - Inline review replies are mirrored as *best effort*:
+    - if the Codeberg instance supports an API replies endpoint, use it
+    - otherwise create another inline comment anchored to the same file/line so it groups visually
+
+- **Codeberg → GitHub**
+  - PR timeline comments are mirrored to GitHub issue comments.
+  - Inline review comments and replies are mirrored to GitHub inline review comments and threaded replies.
+  - Mirroring Codeberg → GitHub is restricted to `allowed_codeberg_users`.
+
+Loop prevention:
+- Never mirror comments that contain `<!-- cbb:mirror ... -->`.
+- Ignore Codeberg webhook events authored by the Codeberg bot user (when discoverable).
 
 ---
 
@@ -223,6 +248,9 @@ Handle these Codeberg/Gitea webhook events:
 - pull_request updated
 - pull_request reopened
 - pull_request closed
+Additionally, when comment mirroring is enabled, accept:
+- issue_comment (PR timeline comments)
+- pull_request_review_comment (inline review comments / review-submitted notifications)
 
 Optional behavior:
 
@@ -266,6 +294,7 @@ The implementation should prefer:
 - Never allow arbitrary git refs.
 - Restrict force-push operations to generated bot branches only.
 - Ignore PRs from users not listed in `allowed_codeberg_users`.
+- Only mirror Codeberg → GitHub comments from users listed in `allowed_codeberg_users`.
 
 ---
 

@@ -17,7 +17,9 @@ def format_mirrored_comment(*, c: MirrorComment) -> str:
     # Keep this stable: it's used for loop prevention and idempotency.
     author = c.src_author
     if c.src_url:
-        author = f"[{c.src_author}]({c.src_url})"
+        author = f"< [{c.src_author}]({c.src_url}) >"
+    else:
+        author = f"< {c.src_author} >"
 
     label = ""
     if c.src_platform in {"github_review", "codeberg_review"}:

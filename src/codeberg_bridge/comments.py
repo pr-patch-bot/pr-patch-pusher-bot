@@ -24,6 +24,8 @@ def format_mirrored_comment(*, c: MirrorComment) -> str:
     header = f"{author}:"
     marker = f"<!-- cbb:mirror src={c.src_platform} id={c.src_id} -->"
     body = (c.body or "").strip()
-    if not body:
-        return "\n".join([header, "", marker]).strip()
-    return "\n".join([header, body, "", marker])
+    if body:
+        text = f"{header} {body}".strip()
+    else:
+        text = header
+    return "\n".join([text, "", marker]).strip()

@@ -19,6 +19,7 @@ log = logging.getLogger("codeberg_bridge.comments_mirror")
 
 _MARKER_NEEDLE = "<!-- cbb:mirror"
 _GITHUB_REVIEW_DISCUSSION_RE = re.compile(r"(?:discussion_r|#r)(\d+)")
+_CBB_MIRROR_GH_REVIEW_ID_RE = re.compile(r"<!--\\s*cbb:mirror\\s+src=github_review\\s+id=(\\d+)\\s*-->")
 _DEFAULT_POST_DELAY_S = 2.0
 
 
@@ -43,6 +44,18 @@ def _extract_github_review_comment_id(text: str) -> int | None:
     if not text:
         return None
     m = _GITHUB_REVIEW_DISCUSSION_RE.search(text)
+    if not m:
+        return None
+    try:
+        return int(m.group(1))
+    except Exception:
+        return None
+
+
+def _extract_mirrored_github_review_id(body: str) -> int | None:
+    if not body:
+        return None
+    m = _CBB_MIRROR_GH_REVIEW_ID_RE.search(body)
     if not m:
         return None
     try:
@@ -470,6 +483,12 @@ async def mirror_comments_once(
                         )
                 else:
                     # Reply — look up the mapped GitHub root comment ID.
+                    # If the Codeberg thread root is itself a mirrored GitHub review comment,
+                    # prefer using the embedded marker to find the true GitHub root. This
+                    # avoids "mirror-of-a-mirror" loops where the Codeberg root was created
+                    # by the bridge and later re-mirrored to GitHub as a new root comment.
+                    github_root_id = _extract_mirrored_github_review_id(str(root_rc.get("body") or ""))
+
                     mapped = db.get_mirrored_comment_dst(
                         codeberg_repo=mirror.codeberg_repo,
                         codeberg_pr_number=codeberg_pr_number,
@@ -478,7 +497,8 @@ async def mirror_comments_once(
                         src_comment_id=root_id,
                         dst_platform="github_review",
                     )
-                    github_root_id = mapped[1] if mapped and mapped[0] == "github_review" else None
+                    if github_root_id is None:
+                        github_root_id = mapped[1] if mapped and mapped[0] == "github_review" else None
 
                     # If the root was originally a GitHub review comment that we mirrored
                     # to Codeberg, the mapping is stored in the opposite direction:

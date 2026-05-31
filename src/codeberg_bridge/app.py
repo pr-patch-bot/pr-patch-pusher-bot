@@ -30,12 +30,25 @@ from .diff_positions import extract_unified_diff_file_patch, unified_diff_positi
 
 log = logging.getLogger("codeberg_bridge.app")
 _GITHUB_REVIEW_DISCUSSION_RE = re.compile(r"(?:discussion_r|#r)(\d+)")
+_CBB_MIRROR_GH_REVIEW_ID_RE = re.compile(r"<!--\\s*cbb:mirror\\s+src=github_review\\s+id=(\\d+)\\s*-->")
 
 
 def _extract_github_review_comment_id(text: str) -> int | None:
     if not text:
         return None
     m = _GITHUB_REVIEW_DISCUSSION_RE.search(text)
+    if not m:
+        return None
+    try:
+        return int(m.group(1))
+    except Exception:
+        return None
+
+
+def _extract_mirrored_github_review_id(body: str) -> int | None:
+    if not body:
+        return None
+    m = _CBB_MIRROR_GH_REVIEW_ID_RE.search(body)
     if not m:
         return None
     try:
@@ -752,12 +765,17 @@ async def webhook_codeberg(request: Request, background: BackgroundTasks) -> Res
                                     )
                                 )
                                 if not is_root:
-                                    github_root_id = _lookup_github_review_root_for_codeberg_root(
+                                    # If the Codeberg root is itself a mirrored GitHub review comment,
+                                    # reply to that true GitHub root (from the embedded marker) instead
+                                    # of to any later mirror-of-a-mirror GitHub root.
+                                    github_root_id = _extract_mirrored_github_review_id(str(body_text))
+                                    if not github_root_id:
+                                        github_root_id = _lookup_github_review_root_for_codeberg_root(
                                         codeberg_repo=mirror.codeberg_repo,
                                         codeberg_pr_number=pr_number,
                                         github_repo=mirror.github_repo,
                                         codeberg_root_comment_id=int(root_id),
-                                    )
+                                        )
                                     if not github_root_id:
                                         # Try to create the root first.
                                         thread_info = await _find_codeberg_review_thread_root_with_retry(

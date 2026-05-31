@@ -585,6 +585,8 @@ async def webhook_codeberg(request: Request, background: BackgroundTasks) -> Res
         if not isinstance(comment_id, int) or not isinstance(comment_user, str) or not comment_user:
             # Some Codeberg/Gitea variants emit a "review submitted" payload here without an
             # explicit inline comment object. Best-effort mirror the review summary content.
+            if codeberg_bot_login and sender_login == codeberg_bot_login:
+                return Response(status_code=202, content="ignored bot review submission")
             review_content = review.get("content")
             if (
                 isinstance(review_content, str)

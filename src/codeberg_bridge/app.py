@@ -659,6 +659,8 @@ async def webhook_codeberg(request: Request, background: BackgroundTasks) -> Res
             # If we don't have a concrete comment object, accept the webhook and
             # scan Codeberg review comments for any unmirrored inline comments.
             if isinstance(repo, str) and repo and isinstance(pr_number, int) and sender_login:
+                if codeberg_bot_login and sender_login == codeberg_bot_login:
+                    return Response(status_code=202, content="ignored bot review scan")
                 mirror = _get_mirror_for_repo(config, repo)
                 if not mirror:
                     return Response(status_code=202, content="no mirror configured")
@@ -714,6 +716,11 @@ async def webhook_codeberg(request: Request, background: BackgroundTasks) -> Res
                                 user = ((rc.get("user") or {}).get("login")) or ""
                                 if not isinstance(rcid, int) or not user:
                                     continue
+                                body_text = rc.get("body") or ""
+                                if (codeberg_bot_login and user == codeberg_bot_login) or _looks_like_mirrored_comment(
+                                    str(body_text)
+                                ):
+                                    continue
                                 if user != sender_login:
                                     continue
                                 if db.has_mirrored_comment_any_dst(
@@ -735,7 +742,6 @@ async def webhook_codeberg(request: Request, background: BackgroundTasks) -> Res
                                 pos = rc.get("position")
                                 ln = rc.get("line") or rc.get("original_line")
                                 url = rc.get("html_url") or pr_url
-                                body_text = rc.get("body") or ""
                                 mirrored_body = format_mirrored_comment(
                                     c=MirrorComment(
                                         src_platform="codeberg_review",
